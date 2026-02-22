@@ -62,6 +62,14 @@ STATE_CENTER = {
     "WI": (44.5, -89.8), "WY": (43.0, -107.6), "DC": (38.9, -77.0),
 }
 
+DOT_PATTERN_OFFSETS = [
+    (-0.35, -0.55), (-0.35, 0.00), (-0.35, 0.55),
+    (0.00, -0.55), (0.00, 0.00), (0.00, 0.55),
+    (0.35, -0.55), (0.35, 0.00), (0.35, 0.55),
+]
+
+STRIPE_PATTERN_OFFSETS = [-0.65, -0.35, -0.05, 0.25, 0.55]
+
 DARK_CSS = """
 <style>
 :root {
@@ -1384,28 +1392,42 @@ def main() -> None:
             for g, col in PERFORMANCE_GROUP_COLOR.items():
                 s = small_conf[small_conf["ROE Performance Group"] == g]
                 if not s.empty:
+                    dot_lat = []
+                    dot_lon = []
+                    for _, r in s.iterrows():
+                        for dlat, dlon in DOT_PATTERN_OFFSETS:
+                            dot_lat.append(float(r["lat"]) + dlat)
+                            dot_lon.append(float(r["lon"]) + dlon)
                     fig.add_scattergeo(
-                        lat=s["lat"],
-                        lon=s["lon"],
+                        lat=dot_lat,
+                        lon=dot_lon,
                         mode="markers",
-                        marker=dict(size=7, color=col, line=dict(color="white", width=0.7)),
+                        marker=dict(size=3.2, color=col, opacity=0.95, line=dict(color="white", width=0.25)),
                         name=f"{g} · Small Conflict",
                         showlegend=False,
                         hoverinfo="skip",
                     )
                 h = high_conf[high_conf["ROE Performance Group"] == g]
                 if not h.empty:
+                    stripe_lat = []
+                    stripe_lon = []
+                    stripe_txt = []
+                    for _, r in h.iterrows():
+                        for dlon in STRIPE_PATTERN_OFFSETS:
+                            stripe_lat.append(float(r["lat"]))
+                            stripe_lon.append(float(r["lon"]) + dlon)
+                            stripe_txt.append("||||")
                     fig.add_scattergeo(
-                        lat=h["lat"],
-                        lon=h["lon"],
+                        lat=stripe_lat,
+                        lon=stripe_lon,
                         mode="text",
-                        text=["////"] * len(h),
-                        textfont=dict(size=10, color=col),
+                        text=stripe_txt,
+                        textfont=dict(size=12, color=col),
                         name=f"{g} · High Conflict",
                         showlegend=False,
                         hoverinfo="skip",
                     )
-            st.caption("Conflict mode: Full Match = full fill, Small Conflict = dotted overlay, High Conflict = stripe-style overlay.")
+            st.caption("Conflict mode: Full Match = full fill, Small Conflict = dotted pattern, High Conflict = vertical stripe pattern.")
 
         event = st.plotly_chart(
             fig,
