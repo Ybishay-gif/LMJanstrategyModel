@@ -647,12 +647,12 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
             if c in precise_currency_cols:
                 column_config[c] = st.column_config.NumberColumn(c, format="$%.2f")
             else:
-                column_config[c] = st.column_config.NumberColumn(c, format="$%,.0f")
+                column_config[c] = st.column_config.NumberColumn(c, format="$%.0f")
         elif c in count_cols and pd.api.types.is_numeric_dtype(out[c]):
-            column_config[c] = st.column_config.NumberColumn(c, format="%,.0f")
+            column_config[c] = st.column_config.NumberColumn(c, format="%.0f")
         elif pd.api.types.is_numeric_dtype(out[c]):
             # Default for any numeric column not explicitly configured.
-            column_config[c] = st.column_config.NumberColumn(c, format="%,.0f")
+            column_config[c] = st.column_config.NumberColumn(c, format="%.0f")
 
     st.dataframe(out, use_container_width=use_container_width, column_config=column_config)
 
