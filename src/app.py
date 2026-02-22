@@ -62,14 +62,6 @@ STATE_CENTER = {
     "WI": (44.5, -89.8), "WY": (43.0, -107.6), "DC": (38.9, -77.0),
 }
 
-DOT_PATTERN_OFFSETS = [
-    (-0.35, -0.55), (-0.35, 0.00), (-0.35, 0.55),
-    (0.00, -0.55), (0.00, 0.00), (0.00, 0.55),
-    (0.35, -0.55), (0.35, 0.00), (0.35, 0.55),
-]
-
-STRIPE_PATTERN_OFFSETS = [-0.65, -0.35, -0.05, 0.25, 0.55]
-
 DARK_CSS = """
 <style>
 :root {
@@ -99,6 +91,25 @@ div[data-testid="stSidebar"] {
   color: var(--muted);
   font-size: 0.90rem;
 }
+.conflict-legend { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+.conflict-item { display:inline-flex; align-items:center; gap:8px; color:var(--text); font-size:0.85rem; }
+.swatch { width:26px; height:16px; border:1px solid rgba(148,163,184,0.6); border-radius:4px; }
+.striped {
+  background: repeating-linear-gradient(
+    45deg,
+    #f3f4f6 0px,
+    #f3f4f6 12px,
+    #e5e7eb 12px,
+    #e5e7eb 24px
+  );
+}
+.dots {
+  background-color: #ffffff;
+  background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+  background-size: 12px 12px;
+  background-position: 0 0;
+}
+.solid { background: #86efac; }
 </style>
 """
 
@@ -115,6 +126,25 @@ LIGHT_CSS = """
   color: #334155;
   font-size: 0.90rem;
 }
+.conflict-legend { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+.conflict-item { display:inline-flex; align-items:center; gap:8px; color:#0f172a; font-size:0.85rem; }
+.swatch { width:26px; height:16px; border:1px solid #94a3b8; border-radius:4px; }
+.striped {
+  background: repeating-linear-gradient(
+    45deg,
+    #f3f4f6 0px,
+    #f3f4f6 12px,
+    #e5e7eb 12px,
+    #e5e7eb 24px
+  );
+}
+.dots {
+  background-color: #ffffff;
+  background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+  background-size: 12px 12px;
+  background-position: 0 0;
+}
+.solid { background: #86efac; }
 </style>
 """
 
@@ -1392,42 +1422,37 @@ def main() -> None:
             for g, col in PERFORMANCE_GROUP_COLOR.items():
                 s = small_conf[small_conf["ROE Performance Group"] == g]
                 if not s.empty:
-                    dot_lat = []
-                    dot_lon = []
-                    for _, r in s.iterrows():
-                        for dlat, dlon in DOT_PATTERN_OFFSETS:
-                            dot_lat.append(float(r["lat"]) + dlat)
-                            dot_lon.append(float(r["lon"]) + dlon)
                     fig.add_scattergeo(
-                        lat=dot_lat,
-                        lon=dot_lon,
+                        lat=s["lat"],
+                        lon=s["lon"],
                         mode="markers",
-                        marker=dict(size=3.2, color=col, opacity=0.95, line=dict(color="white", width=0.25)),
+                        marker=dict(symbol="circle-open-dot", size=16, color=col, line=dict(color="white", width=1)),
                         name=f"{g} · Small Conflict",
                         showlegend=False,
                         hoverinfo="skip",
                     )
                 h = high_conf[high_conf["ROE Performance Group"] == g]
                 if not h.empty:
-                    stripe_lat = []
-                    stripe_lon = []
-                    stripe_txt = []
-                    for _, r in h.iterrows():
-                        for dlon in STRIPE_PATTERN_OFFSETS:
-                            stripe_lat.append(float(r["lat"]))
-                            stripe_lon.append(float(r["lon"]) + dlon)
-                            stripe_txt.append("||||")
                     fig.add_scattergeo(
-                        lat=stripe_lat,
-                        lon=stripe_lon,
+                        lat=h["lat"],
+                        lon=h["lon"],
                         mode="text",
-                        text=stripe_txt,
-                        textfont=dict(size=12, color=col),
+                        text=["▥"] * len(h),
+                        textfont=dict(size=14, color=col),
                         name=f"{g} · High Conflict",
                         showlegend=False,
                         hoverinfo="skip",
                     )
-            st.caption("Conflict mode: Full Match = full fill, Small Conflict = dotted pattern, High Conflict = vertical stripe pattern.")
+            st.markdown(
+                """
+                <div class="conflict-legend">
+                  <span class="conflict-item"><span class="swatch solid"></span>Full Match</span>
+                  <span class="conflict-item"><span class="swatch dots"></span>Small Conflict</span>
+                  <span class="conflict-item"><span class="swatch striped"></span>High Conflict</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         event = st.plotly_chart(
             fig,
