@@ -718,63 +718,59 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
     return out
 
 
-STRATEGY_SCALE_BUCKETS = {"Strongest Momentum", "Moderate Momentum", "Minimal Growth"}
-STRATEGY_DEFEND_BUCKETS = {"LTV Constrained", "Closure Constrained", "Inactive/Low Spend"}
+STRATEGY_ORDER = [
+    "Strongest Momentum",
+    "Moderate Momentum",
+    "Minimal Growth",
+    "LTV Constrained",
+    "Closure Constrained",
+    "Inactive/Low Spend",
+]
 
 
-def _strategy_family(bucket: str) -> str:
-    if bucket in STRATEGY_SCALE_BUCKETS:
-        return "Scale Strategy"
-    if bucket in STRATEGY_DEFEND_BUCKETS:
-        return "Defend Strategy"
-    return "Defend Strategy"
-
-
-def _tier_catalog_12() -> pd.DataFrame:
+def _tier_catalog_strategy_split() -> pd.DataFrame:
     rows = []
     n = 1
-    for family in ["Scale Strategy", "Defend Strategy"]:
-        for intent in ["High", "Low"]:
-            for click_potential in ["High", "Mid", "Low"]:
+    for strategy in STRATEGY_ORDER:
+        for growth in ["High", "Low"]:
+            for intent in ["High", "Low"]:
                 rows.append(
                     {
                         "Tier Number": n,
-                        "Strategy Base": family,
+                        "Strategy Bucket": strategy,
+                        "Growth Tier": growth,
                         "Intent Tier": intent,
-                        "Add Clicks Tier": click_potential,
-                        "Tier Name": f"T{n} {family} | {intent} Intent | {click_potential} Clicks",
+                        "Tier Name": f"T{n} {strategy} | {growth} Growth | {intent} Intent",
                     }
                 )
                 n += 1
     return pd.DataFrame(rows)
 
 
-def build_strategy_12_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     t = rec.copy()
-    t["Strategy Base"] = t["Strategy Bucket"].map(_strategy_family)
+    t["Growth Tier"] = quantile_bucket(t["Expected Additional Clicks"].fillna(0), ["Low", "High"])
     t["Intent Tier"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "High"])
-    t["Add Clicks Tier"] = quantile_bucket(t["Expected Additional Clicks"].fillna(0), ["Low", "Mid", "High"])
 
-    catalog = _tier_catalog_12()
+    catalog = _tier_catalog_strategy_split()
     tier_map = {
-        (r["Strategy Base"], r["Intent Tier"], r["Add Clicks Tier"]): int(r["Tier Number"])
+        (r["Strategy Bucket"], r["Growth Tier"], r["Intent Tier"]): int(r["Tier Number"])
         for _, r in catalog.iterrows()
     }
     t["Tier Number"] = t.apply(
-        lambda r: tier_map.get((r["Strategy Base"], r["Intent Tier"], r["Add Clicks Tier"]), 12),
+        lambda r: tier_map.get((r["Strategy Bucket"], r["Growth Tier"], r["Intent Tier"]), len(catalog)),
         axis=1,
     )
     t = t.merge(catalog[["Tier Number", "Tier Name"]], on="Tier Number", how="left")
 
     summary = (
         t.groupby(
-            ["Tier Number", "Tier Name", "Strategy Base", "Intent Tier", "Add Clicks Tier"],
+            ["Tier Number", "Tier Name", "Strategy Bucket", "Growth Tier", "Intent Tier"],
             as_index=False,
         )
         .agg(
             Rows=("Channel Groups", "count"),
             States=("State", lambda x: ", ".join(sorted(set(x)))),
-            Strategy_Buckets=("Strategy Bucket", lambda x: ", ".join(sorted(set(x)))),
             Sub_Channels=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
             Segments=("Segment", lambda x: ", ".join(sorted(set(x)))),
             Additional_Clicks=("Expected Additional Clicks", "sum"),
@@ -785,11 +781,11 @@ def build_strategy_12_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
 
     summary = catalog.merge(
         summary,
-        on=["Tier Number", "Tier Name", "Strategy Base", "Intent Tier", "Add Clicks Tier"],
+        on=["Tier Number", "Tier Name", "Strategy Bucket", "Growth Tier", "Intent Tier"],
         how="left",
     ).sort_values("Tier Number")
 
-    fill_text = ["States", "Strategy_Buckets", "Sub_Channels", "Segments"]
+    fill_text = ["States", "Sub_Channels", "Segments"]
     for c in fill_text:
         summary[c] = summary[c].fillna("n/a")
     fill_num = ["Rows", "Additional_Clicks", "Additional_Binds", "Current_Binds"]
@@ -800,15 +796,14 @@ def build_strategy_12_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
         [
             "Tier Number",
             "Tier Name",
-            "Strategy Base",
+            "Strategy Bucket",
+            "Growth Tier",
             "Intent Tier",
-            "Add Clicks Tier",
             "Rows",
             "Additional_Clicks",
             "Additional_Binds",
             "Current_Binds",
             "States",
-            "Strategy_Buckets",
             "Sub_Channels",
             "Segments",
         ]
@@ -818,11 +813,10 @@ def build_strategy_12_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
         [
             "Tier Number",
             "Tier Name",
-            "Strategy Base",
-            "Intent Tier",
-            "Add Clicks Tier",
-            "State",
             "Strategy Bucket",
+            "Growth Tier",
+            "Intent Tier",
+            "State",
             "Channel Groups",
             "Segment",
             "Bids",
@@ -1378,8 +1372,8 @@ def main() -> None:
 
         render_formatted_table(out_show, use_container_width=True)
 
-        st.markdown("**🏷️ 12 Tiers: Product Strategy Base + Intent (High/Low) + Additional Clicks (Low/Mid/High)**")
-        tier_summary, tier_detail = build_strategy_12_tiers(out)
+        st.markdown("**🏷️ Strategy-First Tiers: 1 strategy per tier + Growth (High/Low) + Intent (High/Low)**")
+        tier_summary, tier_detail = build_strategy_tiers(out)
         render_formatted_table(tier_summary, use_container_width=True)
 
         st.markdown("**🔎 Sub-tier Details (state + sub channel rows)**")
