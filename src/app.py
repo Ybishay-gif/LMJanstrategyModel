@@ -460,6 +460,36 @@ def styled_table(df: pd.DataFrame, perf_cols: list[str], strategy_cols: list[str
     return styler
 
 
+def _fmt_pct(x):
+    return "n/a" if pd.isna(x) else f"{x:.1%}"
+
+
+def _fmt_cur(x):
+    return "n/a" if pd.isna(x) else f"${x:,.0f}"
+
+
+def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    pct_cols = {
+        "ROE", "Combined Ratio", "Performance",
+        "ROE Proxy", "CR Proxy", "Performance Score",
+        "Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy",
+    }
+    currency_cols = {
+        "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
+        "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
+    }
+
+    for c in out.columns:
+        if c in pct_cols and pd.api.types.is_numeric_dtype(out[c]):
+            out[c] = out[c].map(_fmt_pct)
+        elif c in currency_cols and pd.api.types.is_numeric_dtype(out[c]):
+            out[c] = out[c].map(_fmt_cur)
+        elif c in {"Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct"} and pd.api.types.is_numeric_dtype(out[c]):
+            out[c] = out[c].map(lambda v: "n/a" if pd.isna(v) else f"{v:+.0f}%")
+    return out
+
+
 def build_tier_table_strategy(rec: pd.DataFrame) -> pd.DataFrame:
     tier = rec.copy()
     tier["Growth Tier"] = quantile_bucket(tier["Growth Score"].fillna(0), ["Low", "Mid", "High"])
@@ -649,10 +679,10 @@ def main() -> None:
             color_discrete_map=STRATEGY_COLOR,
             hover_data={
                 "State": True,
-                "ROE": ":.3f",
-                "Combined Ratio": ":.3f",
+                "ROE": ":.1%",
+                "Combined Ratio": ":.1%",
                 "Binds": ":,.0f",
-                "Avg. MRLTV": ":,.0f",
+                "Avg. MRLTV": "$:,.0f",
                 "Expected_Additional_Clicks": ":,.0f",
                 "Expected_Additional_Binds": ":,.1f",
                 "Strategy Bucket": True,
@@ -727,21 +757,22 @@ def main() -> None:
             with st.container(border=True):
                 st.subheader(f"🔎 State Deep Dive: {selected_state}")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("💸 ROE", f"{row['ROE'].iloc[0]:.3f}")
-                c2.metric("⚖️ Combined Ratio", f"{row['Combined Ratio'].iloc[0]:.3f}")
+                c1.metric("💸 ROE", f"{row['ROE'].iloc[0]:.1%}")
+                c2.metric("⚖️ Combined Ratio", f"{row['Combined Ratio'].iloc[0]:.1%}")
                 c3.metric("🧷 Binds", f"{row['Binds'].iloc[0]:,.0f}")
-                c4.metric("💎 Avg LTV", f"{row['Avg. MRLTV'].iloc[0]:,.0f}")
+                c4.metric("💎 Avg LTV", f"${row['Avg. MRLTV'].iloc[0]:,.0f}")
 
                 c5, c6 = st.columns(2)
                 c5.metric("✨ State Additional Clicks", f"{row['Expected_Additional_Clicks'].iloc[0]:,.0f}")
                 c6.metric("🎉 State Additional Binds", f"{row['Expected_Additional_Binds'].iloc[0]:,.1f}")
 
                 st.markdown("**🧩 Per-Segment KPI + Opportunity**")
+                seg_show = seg_view[[
+                    "Segment", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
+                    "Expected_Additional_Clicks", "Expected_Additional_Binds"
+                ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 st.dataframe(
-                    seg_view[[
-                        "Segment", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
-                        "Expected_Additional_Clicks", "Expected_Additional_Binds"
-                    ]].sort_values("Expected_Additional_Clicks", ascending=False),
+                    format_display_df(seg_show),
                     use_container_width=True,
                 )
 
@@ -774,7 +805,7 @@ def main() -> None:
             Avg_LTV=("MRLTV Proxy", "mean"),
         ).sort_values("Additional_Clicks", ascending=False)
 
-        st.dataframe(grp, use_container_width=True)
+        st.dataframe(format_display_df(grp), use_container_width=True)
 
     with tabs[2]:
         st.subheader("🧠 Channel Group + State Recommendations")
@@ -809,7 +840,7 @@ def main() -> None:
 
         st.dataframe(
             styled_table(
-                out_show,
+                format_display_df(out_show),
                 perf_cols=["Performance Score", "ROE Proxy", "CR Proxy", "MRLTV Proxy"],
                 strategy_cols=["Strategy Bucket", "Composite Score", "Recommendation"],
             ),
@@ -818,11 +849,11 @@ def main() -> None:
 
         st.markdown("**🏷️ Tiers by Growth + Intent + Product Strategy (Top 10)**")
         tier_strategy = build_tier_table_strategy(out)
-        st.dataframe(tier_strategy, use_container_width=True)
+        st.dataframe(format_display_df(tier_strategy), use_container_width=True)
 
         st.markdown("**🏁 Tiers by Growth + Intent + Performance Score (Top 10)**")
         tier_perf = build_tier_table_perf(out)
-        st.dataframe(tier_perf, use_container_width=True)
+        st.dataframe(format_display_df(tier_perf), use_container_width=True)
 
         csv_bytes = out_show.to_csv(index=False).encode("utf-8")
         st.download_button(
