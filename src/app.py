@@ -216,19 +216,54 @@ def prepare_state(state_df: pd.DataFrame, strategy_df: pd.DataFrame) -> pd.DataF
         + 0.15 * ((out["Avg. MRLTV"].fillna(out["Avg. MRLTV"].median()) / out["Avg. MRLTV"].median()) - 1)
     )
 
-    out["Conflict Flag"] = np.where(
-        (
-            out["Strategy Bucket"].isin(["Strongest Momentum", "Moderate Momentum"])
-            & ((out["ROE"] < -0.20) | (out["Combined Ratio"] > 1.10))
-        )
-        |
-        (
-            out["Strategy Bucket"].isin(["LTV Constrained", "Closure Constrained", "Inactive/Low Spend"])
-            & (out["Profitability Score"] > 0.22)
-        ),
-        "Conflict",
-        "Aligned",
+    out["ROE Band"] = np.select(
+        [out["ROE"] >= 0, out["ROE"].between(-0.20, 0, inclusive="left")],
+        ["Good", "OK"],
+        default="Poor",
     )
+    out["CR Band"] = np.select(
+        [out["Combined Ratio"] < 1.00, out["Combined Ratio"].between(1.00, 1.15, inclusive="both")],
+        ["Good", "OK"],
+        default="Poor",
+    )
+    out["Performance Band"] = np.select(
+        [out["Performance"] >= 1.0, out["Performance"].between(0.90, 1.0, inclusive="left")],
+        ["Good", "OK"],
+        default="Poor",
+    )
+
+    band_score = {"Good": 1.0, "OK": 0.0, "Poor": -1.0}
+    out["Actual Health Score"] = (
+        out["ROE Band"].map(band_score).fillna(0)
+        + out["CR Band"].map(band_score).fillna(0)
+        + out["Performance Band"].map(band_score).fillna(0)
+    ) / 3.0
+
+    target_map = {
+        "Strongest Momentum": 1.0,
+        "Moderate Momentum": 0.6,
+        "Minimal Growth": 0.2,
+        "LTV Constrained": -0.4,
+        "Closure Constrained": -0.4,
+        "Inactive/Low Spend": -0.8,
+    }
+    out["Strategy Target Score"] = out["Strategy Bucket"].map(target_map).fillna(0.0)
+    out["Conflict Delta"] = (out["Strategy Target Score"] - out["Actual Health Score"]).abs()
+
+    out["Conflict Level"] = np.select(
+        [out["Conflict Delta"] <= 0.35, out["Conflict Delta"] <= 0.90],
+        ["Full Match", "Small Conflict"],
+        default="High Conflict",
+    )
+    out["Conflict Arrow"] = out["Conflict Level"].map(
+        {"Full Match": "⬆", "Small Conflict": "⬅", "High Conflict": "⬇"}
+    )
+    out["Performance Tone"] = np.select(
+        [out["Actual Health Score"] > 0.2, out["Actual Health Score"] < -0.2],
+        ["Good", "Poor"],
+        default="OK",
+    )
+    out["Conflict Flag"] = np.where(out["Conflict Level"] == "Full Match", "Aligned", "Conflict")
     return out
 
 
@@ -585,7 +620,7 @@ def main() -> None:
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
         min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.92, 0.01)
         roe_pullback_floor = st.slider("ROE pullback floor", -1.0, 0.5, -0.20, 0.01)
-        cr_pullback_ceiling = st.slider("Combined ratio pullback ceiling", 0.8, 1.5, 1.10, 0.01)
+        cr_pullback_ceiling = st.slider("Combined ratio pullback ceiling", 0.8, 1.5, 1.15, 0.01)
 
         st.markdown("**Score Cutoffs**")
         aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.65, 0.01)
@@ -669,6 +704,20 @@ def main() -> None:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
         map_df["Expected_Additional_Clicks"] = map_df["Expected_Additional_Clicks"].fillna(0)
         map_df["Expected_Additional_Binds"] = map_df["Expected_Additional_Binds"].fillna(0)
+        map_df["Indicator"] = np.where(
+            map_df["Performance Tone"] == "Good",
+            "🟢",
+            np.where(map_df["Performance Tone"] == "Poor", "🔴", "🟡"),
+        )
+        map_df["Conflict Label"] = map_df["Conflict Arrow"] + " " + map_df["Conflict Level"]
+
+        map_df["ROE Display"] = map_df["ROE"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+        map_df["CR Display"] = map_df["Combined Ratio"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+        map_df["Perf Display"] = map_df["Performance"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+        map_df["LTV Display"] = map_df["Avg. MRLTV"].map(lambda x: "n/a" if pd.isna(x) else f"${x:,.0f}")
+        map_df["Binds Display"] = map_df["Binds"].map(lambda x: "n/a" if pd.isna(x) else f"{x:,.0f}")
+        map_df["Add Clicks Display"] = map_df["Expected_Additional_Clicks"].map(lambda x: f"{x:,.0f}")
+        map_df["Add Binds Display"] = map_df["Expected_Additional_Binds"].map(lambda x: f"{x:,.1f}")
 
         fig = px.choropleth(
             map_df,
@@ -677,17 +726,36 @@ def main() -> None:
             scope="usa",
             color="Strategy Bucket",
             color_discrete_map=STRATEGY_COLOR,
-            hover_data={
-                "State": True,
-                "ROE": ":.1%",
-                "Combined Ratio": ":.1%",
-                "Binds": ":,.0f",
-                "Avg. MRLTV": "$:,.0f",
-                "Expected_Additional_Clicks": ":,.0f",
-                "Expected_Additional_Binds": ":,.1f",
-                "Strategy Bucket": True,
-            },
             title="US Map: Strategy Bucket + State KPIs",
+        )
+        fig.update_traces(
+            customdata=np.stack(
+                [
+                    map_df["Strategy Bucket"].astype(str),
+                    map_df["Indicator"].astype(str),
+                    map_df["Conflict Label"].astype(str),
+                    map_df["ROE Display"].astype(str),
+                    map_df["CR Display"].astype(str),
+                    map_df["Perf Display"].astype(str),
+                    map_df["Binds Display"].astype(str),
+                    map_df["LTV Display"].astype(str),
+                    map_df["Add Clicks Display"].astype(str),
+                    map_df["Add Binds Display"].astype(str),
+                ],
+                axis=-1,
+            ),
+            hovertemplate=(
+                "<b style='font-size:14px;'>%{location}</b><br>"
+                "<span style='color:#9ca3af'>Strategy:</span> %{customdata[0]}<br>"
+                "<span style='color:#9ca3af'>Fit:</span> %{customdata[1]} %{customdata[2]}<br>"
+                "<span style='color:#9ca3af'>ROE:</span> %{customdata[3]}<br>"
+                "<span style='color:#9ca3af'>Combined Ratio:</span> %{customdata[4]}<br>"
+                "<span style='color:#9ca3af'>Performance:</span> %{customdata[5]}<br>"
+                "<span style='color:#9ca3af'>Binds:</span> %{customdata[6]}<br>"
+                "<span style='color:#9ca3af'>Avg LTV:</span> %{customdata[7]}<br>"
+                "<span style='color:#9ca3af'>Add. Clicks:</span> %{customdata[8]}<br>"
+                "<span style='color:#9ca3af'>Add. Binds:</span> %{customdata[9]}<extra></extra>"
+            ),
         )
         fig.update_layout(
             margin=dict(l=0, r=0, t=40, b=0),
@@ -761,6 +829,17 @@ def main() -> None:
                 c2.metric("⚖️ Combined Ratio", f"{row['Combined Ratio'].iloc[0]:.1%}")
                 c3.metric("🧷 Binds", f"{row['Binds'].iloc[0]:,.0f}")
                 c4.metric("💎 Avg LTV", f"${row['Avg. MRLTV'].iloc[0]:,.0f}")
+                tone = row["Performance Tone"].iloc[0]
+                arrow = row["Conflict Arrow"].iloc[0]
+                lvl = row["Conflict Level"].iloc[0]
+                tone_color = "#22c55e" if tone == "Good" else "#ef4444" if tone == "Poor" else "#f59e0b"
+                st.markdown(
+                    f"<div style='padding:8px 10px;border-radius:10px;background:rgba(255,255,255,0.04);"
+                    f"border:1px solid rgba(255,255,255,0.12);display:inline-block;'>"
+                    f"<span style='font-weight:700;color:{tone_color};'>{arrow} {lvl}</span>"
+                    f" <span style='color:#9ca3af;'>Strategy vs actual performance</span></div>",
+                    unsafe_allow_html=True,
+                )
 
                 c5, c6 = st.columns(2)
                 c5.metric("✨ State Additional Clicks", f"{row['Expected_Additional_Clicks'].iloc[0]:,.0f}")
@@ -775,6 +854,21 @@ def main() -> None:
                     format_display_df(seg_show),
                     use_container_width=True,
                 )
+
+        st.markdown("**State Strategy vs Actual Indicator**")
+        indicator_view = map_df[[
+            "State", "Strategy Bucket", "Conflict Arrow", "Conflict Level", "Performance Tone", "ROE", "Combined Ratio", "Performance"
+        ]].sort_values(["Conflict Level", "State"])
+        indicator_view["Indicator"] = np.where(
+            indicator_view["Performance Tone"] == "Good",
+            "🟢",
+            np.where(indicator_view["Performance Tone"] == "Poor", "🔴", "🟡"),
+        )
+        indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
+        st.dataframe(
+            format_display_df(indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance"]]),
+            use_container_width=True,
+        )
 
     with tabs[1]:
         st.subheader("📊 Channel Group Analysis")
