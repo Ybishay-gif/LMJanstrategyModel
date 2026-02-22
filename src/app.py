@@ -175,7 +175,7 @@ def apply_price_effects(
     rec: pd.DataFrame, price_eval_df: pd.DataFrame
 ) -> pd.DataFrame:
     effects = (
-        price_eval_df[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "CPC Lift %"]]
+        price_eval_df[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
         .mean(numeric_only=True)
     )
@@ -187,16 +187,23 @@ def apply_price_effects(
     def lookup(row: pd.Series) -> pd.Series:
         g = effect_dict.get(row["Channel Groups"])
         if g is None or g.empty:
-            return pd.Series([row["Suggested Price Adjustment %"], 0.0, 0.0])
+            return pd.Series([row["Suggested Price Adjustment %"], 0.0, 0.0, 0.0])
         target = row["Suggested Price Adjustment %"]
         idx = (g["Price Adjustment Percent"] - target).abs().idxmin()
         near = g.loc[idx]
-        return pd.Series([near["Price Adjustment Percent"], near["Clicks Lift %"], near["CPC Lift %"]])
+        return pd.Series(
+            [
+                near["Price Adjustment Percent"],
+                near["Clicks Lift %"],
+                near["Win Rate Lift %"],
+                near["CPC Lift %"],
+            ]
+        )
 
     mapped = rec.apply(lookup, axis=1)
-    mapped.columns = ["Applied Price Adjustment %", "Clicks Lift %", "CPC Lift %"]
+    mapped.columns = ["Applied Price Adjustment %", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]
     out = rec.copy()
-    out[["Applied Price Adjustment %", "Clicks Lift %", "CPC Lift %"]] = mapped
+    out[["Applied Price Adjustment %", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]] = mapped
     return out
 
 
@@ -466,15 +473,20 @@ def build_model_tables(
 
     rec = apply_price_effects(rec, price_eval_df)
     rec["Clicks Lift %"] = rec["Clicks Lift %"].fillna(0)
+    rec["Win Rate Lift %"] = rec["Win Rate Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
+    # Use the stronger of measured click lift and win-rate lift as growth proxy for state-level upside.
+    rec["Lift Proxy %"] = np.maximum(rec["Clicks Lift %"], rec["Win Rate Lift %"])
     # Growth objective: do not apply positive/neutral adjustments that predict lower clicks.
-    no_growth = rec["Clicks Lift %"] < 0
+    no_growth = rec["Lift Proxy %"] < 0
     rec.loc[no_growth, "Suggested Price Adjustment %"] = 0
     rec.loc[no_growth, "Applied Price Adjustment %"] = 0
     rec.loc[no_growth, "Clicks Lift %"] = 0
+    rec.loc[no_growth, "Win Rate Lift %"] = 0
+    rec.loc[no_growth, "Lift Proxy %"] = 0
     rec.loc[no_growth, "CPC Lift %"] = 0
 
-    rec["Test-based Additional Clicks"] = rec["Clicks"] * rec["Clicks Lift %"]
+    rec["Test-based Additional Clicks"] = rec["Clicks"] * rec["Lift Proxy %"]
     target_win_rate = rec["Strategy Bucket"].map(
         {
             "Strongest Momentum": 0.35,
