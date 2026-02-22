@@ -718,134 +718,126 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
     return out
 
 
-TIER_NAME_MAP = {
-    1: "T1 Defend-Only",
-    2: "T2 Stabilize",
-    3: "T3 Maintain",
-    4: "T4 Selective Tests",
-    5: "T5 Balanced Scale",
-    6: "T6 Intent-Led Scale",
-    7: "T7 Growth Priority",
-    8: "T8 Accelerate",
-    9: "T9 Aggressive Scale",
-    10: "T10 Full-Throttle",
-}
-
-TIER_DEFINITION_MAP = {
-    1: "Low Growth + Low Intent + Weak Third Factor",
-    2: "Low Growth + Mixed Intent + Weak/Medium Third Factor",
-    3: "Mixed Growth/Intent with Weak Third Factor",
-    4: "Balanced Mid-Lane",
-    5: "Intent/Growth Opportunity with one weak dimension",
-    6: "High Third Factor with Mixed Growth/Intent",
-    7: "Strong Upside with one limiting dimension",
-    8: "Scale Candidate (2 strong dimensions)",
-    9: "High-Confidence Scale (very strong profile)",
-    10: "Top Priority Scale (High Growth + High Intent + High Third Factor)",
-}
+STRATEGY_SCALE_BUCKETS = {"Strongest Momentum", "Moderate Momentum", "Minimal Growth"}
+STRATEGY_DEFEND_BUCKETS = {"LTV Constrained", "Closure Constrained", "Inactive/Low Spend"}
 
 
-def _tier_num_to_name(tier_num: int) -> str:
-    return TIER_NAME_MAP.get(int(tier_num), f"T{int(tier_num)}")
+def _strategy_family(bucket: str) -> str:
+    if bucket in STRATEGY_SCALE_BUCKETS:
+        return "Scale Strategy"
+    if bucket in STRATEGY_DEFEND_BUCKETS:
+        return "Defend Strategy"
+    return "Defend Strategy"
 
 
-def _assign_tier_number(g: int, i: int, t: int) -> int:
-    # Rule-based bins to keep tiers meaningfully differentiated.
-    if g == 2 and i == 2 and t == 2:
-        return 10
-    if (g == 2 and i == 2 and t == 1) or (g == 2 and i == 1 and t == 2):
-        return 9
-    if (g == 1 and i == 2 and t == 2) or (g == 2 and i == 1 and t == 1):
-        return 8
-    if (g == 2 and i == 2 and t == 0) or (g == 1 and i == 2 and t == 1) or (g == 2 and i == 1 and t == 0):
-        return 7
-    if (g == 1 and i == 1 and t == 2) or (g == 2 and i == 0 and t == 2):
-        return 6
-    if (g == 1 and i == 2 and t == 0) or (g == 2 and i == 0 and t == 1) or (g == 0 and i == 2 and t == 2):
-        return 5
-    if (g == 1 and i == 1 and t == 1) or (g == 0 and i == 2 and t == 1) or (g == 1 and i == 0 and t == 2):
-        return 4
-    if (g == 1 and i == 1 and t == 0) or (g == 0 and i == 1 and t == 2) or (g == 2 and i == 0 and t == 0):
-        return 3
-    if (g == 0 and i == 1 and t == 1) or (g == 1 and i == 0 and t == 1) or (g == 0 and i == 2 and t == 0):
-        return 2
-    return 1
+def _tier_catalog_12() -> pd.DataFrame:
+    rows = []
+    n = 1
+    for family in ["Scale Strategy", "Defend Strategy"]:
+        for intent in ["High", "Low"]:
+            for click_potential in ["High", "Mid", "Low"]:
+                rows.append(
+                    {
+                        "Tier Number": n,
+                        "Strategy Base": family,
+                        "Intent Tier": intent,
+                        "Add Clicks Tier": click_potential,
+                        "Tier Name": f"T{n} {family} | {intent} Intent | {click_potential} Clicks",
+                    }
+                )
+                n += 1
+    return pd.DataFrame(rows)
 
 
-def _build_tier_assignments(rec: pd.DataFrame, mode: str) -> pd.DataFrame:
+def build_strategy_12_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     t = rec.copy()
-    t["Growth Bucket"] = quantile_bucket(t["Growth Score"].fillna(0), ["Low", "Mid", "High"])
-    t["Intent Bucket"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "Mid", "High"])
-    g_num = t["Growth Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0)
-    i_num = t["Intent Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0)
+    t["Strategy Base"] = t["Strategy Bucket"].map(_strategy_family)
+    t["Intent Tier"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "High"])
+    t["Add Clicks Tier"] = quantile_bucket(t["Expected Additional Clicks"].fillna(0), ["Low", "Mid", "High"])
 
-    if mode == "strategy":
-        t["Third Bucket"] = t["Strategy Bucket"].map(
-            {
-                "Strongest Momentum": "High",
-                "Moderate Momentum": "High",
-                "Minimal Growth": "Mid",
-                "LTV Constrained": "Low",
-                "Closure Constrained": "Low",
-                "Inactive/Low Spend": "Low",
-            }
-        ).fillna("Mid")
-    else:
-        t["Third Bucket"] = quantile_bucket(t["Performance Score"].fillna(0), ["Low", "Mid", "High"])
+    catalog = _tier_catalog_12()
+    tier_map = {
+        (r["Strategy Base"], r["Intent Tier"], r["Add Clicks Tier"]): int(r["Tier Number"])
+        for _, r in catalog.iterrows()
+    }
+    t["Tier Number"] = t.apply(
+        lambda r: tier_map.get((r["Strategy Base"], r["Intent Tier"], r["Add Clicks Tier"]), 12),
+        axis=1,
+    )
+    t = t.merge(catalog[["Tier Number", "Tier Name"]], on="Tier Number", how="left")
 
-    th_num = t["Third Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0).astype(int)
-    t["Tier Number"] = [
-        _assign_tier_number(int(g), int(i), int(th))
-        for g, i, th in zip(g_num.astype(int), i_num.astype(int), th_num)
-    ]
-    t["Tier Name"] = t["Tier Number"].map(_tier_num_to_name)
-    return t
+    summary = (
+        t.groupby(
+            ["Tier Number", "Tier Name", "Strategy Base", "Intent Tier", "Add Clicks Tier"],
+            as_index=False,
+        )
+        .agg(
+            Rows=("Channel Groups", "count"),
+            States=("State", lambda x: ", ".join(sorted(set(x)))),
+            Strategy_Buckets=("Strategy Bucket", lambda x: ", ".join(sorted(set(x)))),
+            Sub_Channels=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
+            Segments=("Segment", lambda x: ", ".join(sorted(set(x)))),
+            Additional_Clicks=("Expected Additional Clicks", "sum"),
+            Additional_Binds=("Expected Additional Binds", "sum"),
+            Current_Binds=("Binds", "sum"),
+        )
+    )
 
-
-def _build_tier_summary(t: pd.DataFrame, basis_label: str) -> pd.DataFrame:
-    def _mode_str(series: pd.Series) -> str:
-        if series.empty:
-            return "n/a"
-        return str(series.mode(dropna=True).iloc[0]) if not series.mode(dropna=True).empty else "n/a"
-
-    out = t.groupby(["Tier Number", "Tier Name"], as_index=False).agg(
-        Basis=("Third Bucket", _mode_str),
-        Growth=("Growth Bucket", _mode_str),
-        Intent=("Intent Bucket", _mode_str),
-        States=("State", lambda x: ", ".join(sorted(set(x)))),
-        Channel_Groups=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
-        Rows=("Channel Groups", "count"),
-        Additional_Clicks=("Expected Additional Clicks", "sum"),
-        Additional_Binds=("Expected Additional Binds", "sum"),
-        Current_Binds=("Binds", "sum"),
+    summary = catalog.merge(
+        summary,
+        on=["Tier Number", "Tier Name", "Strategy Base", "Intent Tier", "Add Clicks Tier"],
+        how="left",
     ).sort_values("Tier Number")
-    out["Definition"] = out["Tier Number"].map(TIER_DEFINITION_MAP)
-    out = out.rename(columns={"Basis": basis_label})
-    return out[
+
+    fill_text = ["States", "Strategy_Buckets", "Sub_Channels", "Segments"]
+    for c in fill_text:
+        summary[c] = summary[c].fillna("n/a")
+    fill_num = ["Rows", "Additional_Clicks", "Additional_Binds", "Current_Binds"]
+    for c in fill_num:
+        summary[c] = summary[c].fillna(0.0)
+
+    summary = summary[
         [
             "Tier Number",
             "Tier Name",
-            "Definition",
-            "Growth",
-            "Intent",
-            basis_label,
+            "Strategy Base",
+            "Intent Tier",
+            "Add Clicks Tier",
             "Rows",
             "Additional_Clicks",
             "Additional_Binds",
             "Current_Binds",
             "States",
-            "Channel_Groups",
+            "Strategy_Buckets",
+            "Sub_Channels",
+            "Segments",
         ]
     ]
 
+    detail = t[
+        [
+            "Tier Number",
+            "Tier Name",
+            "Strategy Base",
+            "Intent Tier",
+            "Add Clicks Tier",
+            "State",
+            "Strategy Bucket",
+            "Channel Groups",
+            "Segment",
+            "Bids",
+            "Clicks",
+            "Expected Additional Clicks",
+            "Expected Additional Binds",
+            "Suggested Price Adjustment %",
+            "Applied Price Adjustment %",
+            "Growth Score",
+            "Intent Score",
+            "Composite Score",
+        ]
+    ].sort_values(["Tier Number", "Expected Additional Binds"], ascending=[True, False])
 
-def build_tier_tables(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    strategy_assign = _build_tier_assignments(rec, mode="strategy")
-    perf_assign = _build_tier_assignments(rec, mode="performance")
-    return (
-        _build_tier_summary(strategy_assign, "Strategy Level"),
-        _build_tier_summary(perf_assign, "Performance Level"),
-    )
+    return summary, detail
 
 
 def main() -> None:
@@ -1386,12 +1378,12 @@ def main() -> None:
 
         render_formatted_table(out_show, use_container_width=True)
 
-        st.markdown("**🏷️ 10 Action Tiers by Growth + Intent + Product Strategy (all rows assigned)**")
-        tier_strategy, tier_perf = build_tier_tables(out)
-        render_formatted_table(tier_strategy, use_container_width=True)
+        st.markdown("**🏷️ 12 Tiers: Product Strategy Base + Intent (High/Low) + Additional Clicks (Low/Mid/High)**")
+        tier_summary, tier_detail = build_strategy_12_tiers(out)
+        render_formatted_table(tier_summary, use_container_width=True)
 
-        st.markdown("**🏁 10 Action Tiers by Growth + Intent + Actual Performance (all rows assigned)**")
-        render_formatted_table(tier_perf, use_container_width=True)
+        st.markdown("**🔎 Sub-tier Details (state + sub channel rows)**")
+        render_formatted_table(tier_detail, use_container_width=True)
 
         csv_bytes = out_show.to_csv(index=False).encode("utf-8")
         st.download_button(
