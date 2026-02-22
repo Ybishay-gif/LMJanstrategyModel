@@ -626,7 +626,10 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
     count_cols = {
         "Bids", "Clicks", "Binds", "Current Binds", "Expected Binds",
         "Expected Additional Clicks", "Expected Additional Binds",
-        "Additional Clicks", "Additional Binds", "Rows",
+        "Expected_Additional_Clicks", "Expected_Additional_Binds",
+        "Additional Clicks", "Additional Binds",
+        "Additional_Clicks", "Additional_Binds",
+        "Rows",
     }
     precise_currency_cols = {"Avg. Bid", "Avg. CPC"}
 
