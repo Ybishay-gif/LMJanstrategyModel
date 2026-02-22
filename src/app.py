@@ -46,6 +46,19 @@ PERFORMANCE_GROUP_COLOR = {
     "Low Sig - Review": "#94A3B8",
 }
 
+CONFLICT_PERF_COLOR = {
+    "Good | Full Match": "#166534",
+    "Good | Small Conflict": "#22C55E",
+    "Good | High Conflict": "#86EFAC",
+    "OK | Full Match": "#A16207",
+    "OK | Small Conflict": "#EAB308",
+    "OK | High Conflict": "#FDE047",
+    "Poor | Full Match": "#991B1B",
+    "Poor | Small Conflict": "#EF4444",
+    "Poor | High Conflict": "#FCA5A5",
+    "Unknown | Unknown": "#94A3B8",
+}
+
 STATE_CENTER = {
     "AL": (32.7, -86.7), "AK": (64.2, -149.5), "AZ": (34.3, -111.7), "AR": (34.9, -92.4),
     "CA": (37.3, -119.7), "CO": (39.0, -105.5), "CT": (41.6, -72.7), "DE": (39.0, -75.5),
@@ -1342,6 +1355,12 @@ def main() -> None:
         map_df["Add Clicks Display"] = map_df["Expected_Additional_Clicks"].map(lambda x: f"{x:,.0f}")
         map_df["Add Binds Display"] = map_df["Expected_Additional_Binds"].map(lambda x: f"{x:,.1f}")
         map_df["Perf Group Display"] = map_df["ROE Performance Group"].fillna("Low Sig - Review")
+        map_df["Conflict Perf Label"] = (
+            map_df["Performance Tone"].fillna("Unknown").astype(str)
+            + " | "
+            + map_df["Conflict Level"].fillna("Unknown").astype(str)
+        )
+        map_df.loc[~map_df["Conflict Perf Label"].isin(CONFLICT_PERF_COLOR.keys()), "Conflict Perf Label"] = "Unknown | Unknown"
 
         map_mode = st.radio(
             "Map color mode",
@@ -1358,9 +1377,9 @@ def main() -> None:
             map_color_map = PERFORMANCE_GROUP_COLOR
             map_title = "US Map: Performance Group + State KPIs"
         else:
-            map_color_col = "ROE Performance Group"
-            map_color_map = PERFORMANCE_GROUP_COLOR
-            map_title = "US Map: Conflict Highlight (full/dots/stripes by conflict level)"
+            map_color_col = "Conflict Perf Label"
+            map_color_map = CONFLICT_PERF_COLOR
+            map_title = "US Map: Conflict + Performance Highlight"
 
         fig = px.choropleth(
             map_df,
@@ -1413,42 +1432,18 @@ def main() -> None:
         )
 
         if map_mode == "Conflict Highlight":
-            ctr = map_df["State"].map(STATE_CENTER)
-            map_df["lat"] = ctr.map(lambda x: x[0] if isinstance(x, tuple) else np.nan)
-            map_df["lon"] = ctr.map(lambda x: x[1] if isinstance(x, tuple) else np.nan)
-            small_conf = map_df[(map_df["Conflict Level"] == "Small Conflict") & map_df["lat"].notna()].copy()
-            high_conf = map_df[(map_df["Conflict Level"] == "High Conflict") & map_df["lat"].notna()].copy()
-
-            for g, col in PERFORMANCE_GROUP_COLOR.items():
-                s = small_conf[small_conf["ROE Performance Group"] == g]
-                if not s.empty:
-                    fig.add_scattergeo(
-                        lat=s["lat"],
-                        lon=s["lon"],
-                        mode="markers",
-                        marker=dict(symbol="circle-open-dot", size=16, color=col, line=dict(color="white", width=1)),
-                        name=f"{g} · Small Conflict",
-                        showlegend=False,
-                        hoverinfo="skip",
-                    )
-                h = high_conf[high_conf["ROE Performance Group"] == g]
-                if not h.empty:
-                    fig.add_scattergeo(
-                        lat=h["lat"],
-                        lon=h["lon"],
-                        mode="text",
-                        text=["▥"] * len(h),
-                        textfont=dict(size=14, color=col),
-                        name=f"{g} · High Conflict",
-                        showlegend=False,
-                        hoverinfo="skip",
-                    )
             st.markdown(
                 """
                 <div class="conflict-legend">
-                  <span class="conflict-item"><span class="swatch solid"></span>Full Match</span>
-                  <span class="conflict-item"><span class="swatch dots"></span>Small Conflict</span>
-                  <span class="conflict-item"><span class="swatch striped"></span>High Conflict</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#166534;"></span>Good + Full Match</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#22C55E;"></span>Good + Small Conflict</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#86EFAC;"></span>Good + High Conflict</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#A16207;"></span>OK + Full Match</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#EAB308;"></span>OK + Small Conflict</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#FDE047;"></span>OK + High Conflict</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#991B1B;"></span>Poor + Full Match</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#EF4444;"></span>Poor + Small Conflict</span>
+                  <span class="conflict-item"><span class="swatch" style="background:#FCA5A5;"></span>Poor + High Conflict</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
