@@ -308,7 +308,7 @@ def prepare_channel_state(channel_state_df: pd.DataFrame) -> pd.DataFrame:
     for col in [
         "Bids", "Avg. CPC", "Avg. Bid", "Impressions", "SOV", "Clicks", "Bids to Clicks",
         "ROE", "Combined Ratio", "Performance", "CPB", "Target CPB", "Quote Start Rate",
-        "Clicks to Quotes", "Avg. MRLTV", "Binds"
+        "Clicks to Quotes", "Avg. MRLTV", "Binds", "Total Click Cost"
     ]:
         if col in df.columns:
             df[col] = to_numeric(df[col])
@@ -577,10 +577,12 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
         "ROE", "Combined Ratio", "Performance",
         "ROE Proxy", "CR Proxy", "Performance Score",
         "Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy",
+        "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %",
     }
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
         "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
+        "Total Cost", "CPC Increase $",
     }
 
     for c in out.columns:
@@ -588,7 +590,7 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = out[c].map(_fmt_pct)
         elif c in currency_cols and pd.api.types.is_numeric_dtype(out[c]):
             out[c] = out[c].map(_fmt_cur)
-        elif c in {"Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct"} and pd.api.types.is_numeric_dtype(out[c]):
+        elif c in {"Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct", "Recommended Bid Adjustment"} and pd.api.types.is_numeric_dtype(out[c]):
             out[c] = out[c].map(lambda v: "n/a" if pd.isna(v) else f"{v:+.0f}%")
     return out
 
@@ -1031,6 +1033,31 @@ def main() -> None:
                     format_display_df(seg_show),
                     use_container_width=True,
                 )
+
+                st.markdown("**📌 Channel Groups In This State**")
+                state_channels = rec_df[rec_df["State"] == selected_state].copy()
+                if state_channels.empty:
+                    st.info("No channel-group rows found for this state.")
+                else:
+                    if "Total Click Cost" in state_channels.columns:
+                        state_channels["Total Cost"] = state_channels["Total Click Cost"]
+                    else:
+                        state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
+                    state_channels["CPC Increase $"] = state_channels["Avg. CPC"] * state_channels["CPC Lift %"]
+
+                    cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
+                        Bids=("Bids", "sum"),
+                        SOV=("SOV", "mean"),
+                        **{"Win Rate": ("Bids to Clicks", "mean")},
+                        **{"Total Cost": ("Total Cost", "sum")},
+                        **{"Recommended Bid Adjustment": ("Applied Price Adjustment %", "median")},
+                        **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
+                        **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
+                        **{"CPC Lift %": ("CPC Lift %", "mean")},
+                        **{"CPC Increase $": ("CPC Increase $", "mean")},
+                    ).sort_values("Expected Additional Clicks", ascending=False)
+
+                    st.dataframe(format_display_df(cg_state), use_container_width=True)
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
