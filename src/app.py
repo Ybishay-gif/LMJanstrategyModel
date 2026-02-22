@@ -633,11 +633,14 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
     }
     precise_currency_cols = {"Avg. Bid", "Avg. CPC"}
     precise_pct_cols = {"Win Rate", "Q2B"}
+    one_decimal_pct_cols = {"Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy"}
 
     for c in out.columns:
         if c in ratio_pct_cols and pd.api.types.is_numeric_dtype(out[c]):
             out[c] = out[c] * 100.0
-            if c in precise_pct_cols:
+            if c in one_decimal_pct_cols:
+                column_config[c] = st.column_config.NumberColumn(c, format="%.1f%%")
+            elif c in precise_pct_cols:
                 column_config[c] = st.column_config.NumberColumn(c, format="%.2f%%")
             else:
                 column_config[c] = st.column_config.NumberColumn(c, format="%.0f%%")
@@ -645,14 +648,14 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
             column_config[c] = st.column_config.NumberColumn(c, format="%+.0f%%")
         elif c in currency_cols and pd.api.types.is_numeric_dtype(out[c]):
             if c in precise_currency_cols:
-                column_config[c] = st.column_config.NumberColumn(c, format="$%.2f")
+                column_config[c] = st.column_config.NumberColumn(c, format="dollar", step=0.01)
             else:
-                column_config[c] = st.column_config.NumberColumn(c, format="$%.0f")
+                column_config[c] = st.column_config.NumberColumn(c, format="dollar", step=1.0)
         elif c in count_cols and pd.api.types.is_numeric_dtype(out[c]):
-            column_config[c] = st.column_config.NumberColumn(c, format="%.0f")
+            column_config[c] = st.column_config.NumberColumn(c, format="localized", step=1.0)
         elif pd.api.types.is_numeric_dtype(out[c]):
             # Default for any numeric column not explicitly configured.
-            column_config[c] = st.column_config.NumberColumn(c, format="%.0f")
+            column_config[c] = st.column_config.NumberColumn(c, format="localized", step=1.0)
 
     try:
         st.dataframe(out, use_container_width=use_container_width, column_config=column_config)
