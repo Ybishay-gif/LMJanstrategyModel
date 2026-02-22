@@ -666,7 +666,12 @@ def main() -> None:
 
         state_list = sorted(map_df["State"].dropna().unique().tolist())
         default_state = state_list[0] if state_list else None
-        selected_state = st.selectbox("Select state for detailed popup", options=state_list, index=0 if default_state else None)
+        selected_state = st.selectbox(
+            "Select state for detailed popup",
+            options=state_list,
+            index=0 if default_state else None,
+            key="tab1_state_popup",
+        )
 
         if event and isinstance(event, dict):
             pts = event.get("selection", {}).get("points", [])
@@ -714,9 +719,9 @@ def main() -> None:
         strategies = sorted(rec_df["Strategy Bucket"].dropna().unique().tolist())
         segments = sorted(rec_df["Segment"].dropna().unique().tolist())
 
-        sel_states = f_col1.multiselect("State", options=states, default=states)
-        sel_strategies = f_col2.multiselect("State Strategy", options=strategies, default=strategies)
-        sel_segments = f_col3.multiselect("Segment", options=segments, default=segments)
+        sel_states = f_col1.multiselect("State", options=states, default=states, key="tab2_state")
+        sel_strategies = f_col2.multiselect("State Strategy", options=strategies, default=strategies, key="tab2_strategy")
+        sel_segments = f_col3.multiselect("Segment", options=segments, default=segments, key="tab2_segment")
 
         filt = rec_df[
             rec_df["State"].isin(sel_states)
@@ -746,10 +751,10 @@ def main() -> None:
         segments = sorted(rec_df["Segment"].dropna().unique().tolist())
         channels = sorted(rec_df["Channel Groups"].dropna().unique().tolist())
 
-        fs = c1.multiselect("State", options=states, default=states)
-        fst = c2.multiselect("State Strategy", options=strategies, default=strategies)
-        fseg = c3.multiselect("Segment", options=segments, default=segments)
-        fch = c4.multiselect("Channel Group", options=channels, default=channels[: min(len(channels), 30)])
+        fs = c1.multiselect("State", options=states, default=states, key="tab3_state")
+        fst = c2.multiselect("State Strategy", options=strategies, default=strategies, key="tab3_strategy")
+        fseg = c3.multiselect("Segment", options=segments, default=segments, key="tab3_segment")
+        fch = c4.multiselect("Channel Group", options=channels, default=channels[: min(len(channels), 30)], key="tab3_channel")
         score_min = c5.slider("Min composite score", 0.0, 1.0, 0.0, 0.05)
 
         out = rec_df[
