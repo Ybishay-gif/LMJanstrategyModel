@@ -105,6 +105,44 @@ class Settings:
     min_clicks_intent_sig: int
     min_bids_price_sig: int
     min_clicks_price_sig: int
+    min_binds_perf_sig: int
+
+
+def classify_perf_group(roe: float, combined_ratio: float, performance: float, binds: float, min_binds_sig: int) -> tuple[str, bool]:
+    sig = pd.notna(binds) and (binds >= min_binds_sig)
+    if not sig:
+        return "Low Sig - Review", False
+
+    strong = 0
+    weak = 0
+
+    if pd.notna(roe):
+        if roe > 0:
+            strong += 1
+        elif roe < -0.25:
+            weak += 1
+    if pd.notna(combined_ratio):
+        if combined_ratio < 1.00:
+            strong += 1
+        elif combined_ratio > 1.15:
+            weak += 1
+    if pd.notna(performance):
+        if performance >= 1.00:
+            strong += 1
+        elif performance < 0.80:
+            weak += 1
+
+    if strong == 3:
+        return "Top Performance", True
+    if weak == 3:
+        return "Poor Performance", True
+    if strong >= 2 and weak == 0:
+        return "Strong Performance", True
+    if weak >= 2 and strong == 0:
+        return "Weak Performance", True
+    if weak >= 1 and strong <= 1:
+        return "Mixed Risk", True
+    return "Balanced", True
 
 
 @st.cache_data(show_spinner=False)
@@ -217,7 +255,7 @@ def apply_price_effects(
     return out
 
 
-def prepare_state(state_df: pd.DataFrame, strategy_df: pd.DataFrame) -> pd.DataFrame:
+def prepare_state(state_df: pd.DataFrame, strategy_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
     df = normalize_columns(state_df)
     for col in ["ROE", "Combined Ratio", "Performance", "CPB", "Target CPB", "Clicks", "Binds", "Avg. MRLTV", "Quotes to Binds"]:
         if col in df.columns:
@@ -281,10 +319,22 @@ def prepare_state(state_df: pd.DataFrame, strategy_df: pd.DataFrame) -> pd.DataF
         default="OK",
     )
     out["Conflict Flag"] = np.where(out["Conflict Level"] == "Full Match", "Aligned", "Conflict")
+    perf_groups = out.apply(
+        lambda r: classify_perf_group(
+            r.get("ROE", np.nan),
+            r.get("Combined Ratio", np.nan),
+            r.get("Performance", np.nan),
+            r.get("Binds", np.nan),
+            settings.min_binds_perf_sig,
+        ),
+        axis=1,
+    )
+    out["ROE Performance Group"] = perf_groups.map(lambda x: x[0])
+    out["Performance Stat Sig"] = perf_groups.map(lambda x: x[1])
     return out
 
 
-def prepare_state_seg(state_seg_df: pd.DataFrame, state_df: pd.DataFrame) -> pd.DataFrame:
+def prepare_state_seg(state_seg_df: pd.DataFrame, state_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
     seg = normalize_columns(state_seg_df).copy()
     st = normalize_columns(state_df).copy()
 
@@ -310,6 +360,18 @@ def prepare_state_seg(state_seg_df: pd.DataFrame, state_df: pd.DataFrame) -> pd.
     out["Perf Delta vs State"] = out["Performance"] - out["State Performance"]
     out["ROE Delta vs State"] = out["ROE"] - out["State ROE"]
     out["CR Delta vs State"] = out["Combined Ratio"] - out["State Combined Ratio"]
+    seg_perf_groups = out.apply(
+        lambda r: classify_perf_group(
+            r.get("ROE", np.nan),
+            r.get("Combined Ratio", np.nan),
+            r.get("Performance", np.nan),
+            r.get("Binds", np.nan),
+            settings.min_binds_perf_sig,
+        ),
+        axis=1,
+    )
+    out["ROE Performance Group"] = seg_perf_groups.map(lambda x: x[0])
+    out["Performance Stat Sig"] = seg_perf_groups.map(lambda x: x[1])
     return out
 
 
@@ -954,6 +1016,7 @@ def main() -> None:
         min_clicks_intent_sig = st.slider("Min clicks for intent significance", 10, 300, 80, 5)
         min_bids_price_sig = st.slider("Min bids for price-test significance", 10, 500, 100, 10)
         min_clicks_price_sig = st.slider("Min clicks for price-test significance", 5, 200, 30, 5)
+        min_binds_perf_sig = st.slider("Min binds for state performance significance", 5, 10, 8, 1)
 
         st.markdown("**Score Cutoffs**")
         aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.40, 0.01)
@@ -985,6 +1048,7 @@ def main() -> None:
             min_clicks_intent_sig=min_clicks_intent_sig,
             min_bids_price_sig=min_bids_price_sig,
             min_clicks_price_sig=min_clicks_price_sig,
+            min_binds_perf_sig=min_binds_perf_sig,
         )
         run = st.button("Refresh", type="primary")
 
@@ -1026,8 +1090,8 @@ def main() -> None:
         st.error(f"Failed to load data: {exc}")
         return
 
-    state_df = prepare_state(state_raw, strategy_df)
-    state_seg_df = prepare_state_seg(state_seg_raw, state_raw)
+    state_df = prepare_state(state_raw, strategy_df, settings)
+    state_seg_df = prepare_state_seg(state_seg_raw, state_raw, settings)
     channel_state_df = prepare_channel_state(channel_state_raw)
     price_eval, best_adj = prepare_price_exploration(price_raw, settings)
     rec_df, state_extra_df, state_seg_extra_df, channel_summary_df = build_model_tables(
@@ -1211,7 +1275,8 @@ def main() -> None:
 
                 st.markdown("**🧩 Per-Segment KPI + Opportunity**")
                 seg_show = seg_view[[
-                    "Segment", "Bids", "Avg. CPC", "Win Rate", "Q2B", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
+                    "Segment", "ROE Performance Group", "Performance Stat Sig",
+                    "Bids", "Avg. CPC", "Win Rate", "Q2B", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
                     "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 render_formatted_table(seg_show, use_container_width=True)
@@ -1288,6 +1353,7 @@ def main() -> None:
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
             "State", "Strategy Bucket", "Conflict Arrow", "Conflict Level", "Performance Tone",
+            "ROE Performance Group", "Performance Stat Sig",
             "ROE", "Combined Ratio", "Performance", "Binds", "Quotes to Binds", "CPB", "Avg. MRLTV"
         ]].sort_values(["Conflict Level", "State"])
         indicator_view["Indicator"] = np.where(
@@ -1298,9 +1364,20 @@ def main() -> None:
         indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
         indicator_view["Q2B"] = indicator_view["Quotes to Binds"]
         render_formatted_table(
-            indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance", "Binds", "Q2B", "CPB", "Avg. MRLTV"]],
+            indicator_view[["State", "Strategy Bucket", "ROE Performance Group", "Performance Stat Sig", "Match", "ROE", "Combined Ratio", "Performance", "Binds", "Q2B", "CPB", "Avg. MRLTV"]],
             use_container_width=True,
         )
+        st.markdown("**ROE-Based State Performance Layer**")
+        state_perf_layer = (
+            map_df.groupby(["ROE Performance Group", "Performance Stat Sig"], as_index=False)
+            .agg(
+                States=("State", lambda x: ", ".join(sorted(set(x)))),
+                Rows=("State", "count"),
+                Binds=("Binds", "sum"),
+            )
+            .sort_values(["Performance Stat Sig", "Rows"], ascending=[False, False])
+        )
+        render_formatted_table(state_perf_layer, use_container_width=True)
 
     with tabs[1]:
         st.subheader("📊 Channel Group Analysis")
