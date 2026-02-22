@@ -602,6 +602,40 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
+    out = df.copy()
+    column_config = {}
+
+    ratio_pct_cols = {
+        "ROE", "Combined Ratio", "Performance", "ROE Proxy", "CR Proxy", "Performance Score",
+        "Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy", "SOV", "Bids to Clicks",
+        "Win Rate", "CPC Lift %", "Total Cost Impact %", "Quotes to Binds", "Q2B",
+        "Scenario Clicks Lift %", "Scenario Win Rate Lift %", "Scenario CPC Lift %", "Scenario Lift Proxy %",
+        "Expected Performance", "Actual Performance (CPB)", "Performance Delta",
+    }
+    point_pct_cols = {
+        "Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct",
+        "Recommended Bid Adjustment", "Scenario Bid Adjustment %",
+    }
+    currency_cols = {
+        "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
+        "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
+        "Total Cost", "Expected Total Cost", "Additional Budget Required", "Additional Budget Needed",
+        "Current Cost", "Actual CPB", "Expected CPB", "Target CPB (avg)", "CPC Impact Cost",
+    }
+
+    for c in out.columns:
+        if c in ratio_pct_cols and pd.api.types.is_numeric_dtype(out[c]):
+            out[c] = out[c] * 100.0
+            column_config[c] = st.column_config.NumberColumn(c, format="%.1f%%")
+        elif c in point_pct_cols and pd.api.types.is_numeric_dtype(out[c]):
+            column_config[c] = st.column_config.NumberColumn(c, format="%+.0f%%")
+        elif c in currency_cols and pd.api.types.is_numeric_dtype(out[c]):
+            column_config[c] = st.column_config.NumberColumn(c, format="$%.0f")
+
+    st.dataframe(out, use_container_width=use_container_width, column_config=column_config)
+
+
 def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str) -> pd.DataFrame:
     effects = (
         price_eval_df[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
@@ -1087,10 +1121,7 @@ def main() -> None:
                     "Segment", "Bids", "Avg. CPC", "Win Rate", "Q2B", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
                     "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
-                st.dataframe(
-                    seg_show,
-                    use_container_width=True,
-                )
+                render_formatted_table(seg_show, use_container_width=True)
 
                 st.markdown("**📌 Channel Groups In This State**")
                 state_channels = rec_df[rec_df["State"] == selected_state].copy()
@@ -1157,7 +1188,7 @@ def main() -> None:
                             0,
                         )
 
-                        st.dataframe(cg_state, use_container_width=True)
+                        render_formatted_table(cg_state, use_container_width=True)
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
@@ -1169,7 +1200,7 @@ def main() -> None:
             np.where(indicator_view["Performance Tone"] == "Poor", "🔴", "🟡"),
         )
         indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
-        st.dataframe(
+        render_formatted_table(
             indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance"]],
             use_container_width=True,
         )
@@ -1273,7 +1304,7 @@ def main() -> None:
         ]
         show_cols = [c for c in show_cols if c in grp.columns]
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
-        st.dataframe(grp, use_container_width=True)
+        render_formatted_table(grp, use_container_width=True)
 
     with tabs[2]:
         st.subheader("🧠 Channel Group + State Recommendations")
@@ -1306,21 +1337,14 @@ def main() -> None:
         ]
         out_show = out[show_cols].sort_values("Composite Score", ascending=False)
 
-        st.dataframe(
-            styled_table(
-                out_show,
-                perf_cols=["Performance Score", "ROE Proxy", "CR Proxy", "MRLTV Proxy"],
-                strategy_cols=["Strategy Bucket", "Composite Score", "Recommendation"],
-            ),
-            use_container_width=True,
-        )
+        render_formatted_table(out_show, use_container_width=True)
 
         st.markdown("**🏷️ 10 Action Tiers by Growth + Intent + Product Strategy (all rows assigned)**")
         tier_strategy, tier_perf = build_tier_tables(out)
-        st.dataframe(tier_strategy, use_container_width=True)
+        render_formatted_table(tier_strategy, use_container_width=True)
 
         st.markdown("**🏁 10 Action Tiers by Growth + Intent + Actual Performance (all rows assigned)**")
-        st.dataframe(tier_perf, use_container_width=True)
+        render_formatted_table(tier_perf, use_container_width=True)
 
         csv_bytes = out_show.to_csv(index=False).encode("utf-8")
         st.download_button(
