@@ -581,40 +581,85 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_tier_table_strategy(rec: pd.DataFrame) -> pd.DataFrame:
-    tier = rec.copy()
-    tier["Growth Tier"] = quantile_bucket(tier["Growth Score"].fillna(0), ["Low", "Mid", "High"])
-    tier["Intent Tier"] = quantile_bucket(tier["Intent Score"].fillna(0), ["Low", "Mid", "High"])
-    tier["Strategy Tier"] = tier["Strategy Bucket"].fillna("Unknown")
+TIER_NAME_MAP = {
+    1: "T1 Defend-Only",
+    2: "T2 Stabilize",
+    3: "T3 Maintain",
+    4: "T4 Selective Tests",
+    5: "T5 Balanced Scale",
+    6: "T6 Intent-Led Scale",
+    7: "T7 Growth Priority",
+    8: "T8 Accelerate",
+    9: "T9 Aggressive Scale",
+    10: "T10 Full-Throttle",
+}
 
-    out = tier.groupby(["Growth Tier", "Intent Tier", "Strategy Tier"], as_index=False).agg(
+
+def _tier_num_to_name(tier_num: int) -> str:
+    return TIER_NAME_MAP.get(int(tier_num), f"T{int(tier_num)}")
+
+
+def _build_tier_assignments(rec: pd.DataFrame, mode: str) -> pd.DataFrame:
+    t = rec.copy()
+    t["Growth Bucket"] = quantile_bucket(t["Growth Score"].fillna(0), ["Low", "Mid", "High"])
+    t["Intent Bucket"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "Mid", "High"])
+    g_num = t["Growth Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0)
+    i_num = t["Intent Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0)
+
+    if mode == "strategy":
+        t["Third Bucket"] = t["Strategy Bucket"].map(
+            {
+                "Strongest Momentum": "High",
+                "Moderate Momentum": "High",
+                "Minimal Growth": "Mid",
+                "LTV Constrained": "Low",
+                "Closure Constrained": "Low",
+                "Inactive/Low Spend": "Low",
+            }
+        ).fillna("Mid")
+    else:
+        t["Third Bucket"] = quantile_bucket(t["Performance Score"].fillna(0), ["Low", "Mid", "High"])
+
+    th_num = t["Third Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0)
+    t["Action Index"] = 0.45 * g_num + 0.35 * i_num + 0.20 * th_num
+
+    q = min(10, int(t["Action Index"].rank(method="first").nunique()))
+    t["Tier Number"] = pd.qcut(
+        t["Action Index"].rank(method="first"),
+        q=q,
+        labels=list(range(1, q + 1)),
+        duplicates="drop",
+    ).astype(int)
+    if q < 10:
+        t["Tier Number"] = np.ceil(t["Tier Number"] * (10 / q)).astype(int)
+    t["Tier Number"] = t["Tier Number"].clip(1, 10)
+    t["Tier Name"] = t["Tier Number"].map(_tier_num_to_name)
+    return t
+
+
+def _build_tier_summary(t: pd.DataFrame, basis_label: str) -> pd.DataFrame:
+    out = t.groupby(["Tier Number", "Tier Name"], as_index=False).agg(
+        Basis=("Third Bucket", lambda x: ", ".join(sorted(set(x)))),
+        Growth=("Growth Bucket", lambda x: ", ".join(sorted(set(x)))),
+        Intent=("Intent Bucket", lambda x: ", ".join(sorted(set(x)))),
         States=("State", lambda x: ", ".join(sorted(set(x)))),
         Channel_Groups=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
         Rows=("Channel Groups", "count"),
         Additional_Clicks=("Expected Additional Clicks", "sum"),
         Additional_Binds=("Expected Additional Binds", "sum"),
-    )
-    out = out.sort_values("Additional_Clicks", ascending=False).head(10)
-    out.insert(0, "Tier", [f"Tier {i}" for i in range(1, len(out) + 1)])
+        Current_Binds=("Binds", "sum"),
+    ).sort_values("Tier Number")
+    out = out.rename(columns={"Basis": basis_label})
     return out
 
 
-def build_tier_table_perf(rec: pd.DataFrame) -> pd.DataFrame:
-    tier = rec.copy()
-    tier["Growth Tier"] = quantile_bucket(tier["Growth Score"].fillna(0), ["Low", "Mid", "High"])
-    tier["Intent Tier"] = quantile_bucket(tier["Intent Score"].fillna(0), ["Low", "Mid", "High"])
-    tier["Performance Tier"] = quantile_bucket(tier["Performance Score"].fillna(0), ["Low", "Mid", "High", "Very High"])
-
-    out = tier.groupby(["Growth Tier", "Intent Tier", "Performance Tier"], as_index=False).agg(
-        States=("State", lambda x: ", ".join(sorted(set(x)))),
-        Channel_Groups=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
-        Rows=("Channel Groups", "count"),
-        Additional_Clicks=("Expected Additional Clicks", "sum"),
-        Additional_Binds=("Expected Additional Binds", "sum"),
+def build_tier_tables(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    strategy_assign = _build_tier_assignments(rec, mode="strategy")
+    perf_assign = _build_tier_assignments(rec, mode="performance")
+    return (
+        _build_tier_summary(strategy_assign, "Strategy Level"),
+        _build_tier_summary(perf_assign, "Performance Level"),
     )
-    out = out.sort_values("Additional_Clicks", ascending=False).head(10)
-    out.insert(0, "Tier", [f"Tier {i}" for i in range(1, len(out) + 1)])
-    return out
 
 
 def main() -> None:
@@ -994,7 +1039,7 @@ def main() -> None:
         fs = c1.multiselect("State", options=states, default=states, key="tab3_state")
         fst = c2.multiselect("State Strategy", options=strategies, default=strategies, key="tab3_strategy")
         fseg = c3.multiselect("Segment", options=segments, default=segments, key="tab3_segment")
-        fch = c4.multiselect("Channel Group", options=channels, default=channels[: min(len(channels), 30)], key="tab3_channel")
+        fch = c4.multiselect("Channel Group", options=channels, default=channels, key="tab3_channel")
         score_min = c5.slider("Min composite score", 0.0, 1.0, 0.0, 0.05)
 
         out = rec_df[
@@ -1022,12 +1067,11 @@ def main() -> None:
             use_container_width=True,
         )
 
-        st.markdown("**🏷️ Tiers by Growth + Intent + Product Strategy (Top 10)**")
-        tier_strategy = build_tier_table_strategy(out)
+        st.markdown("**🏷️ 10 Action Tiers by Growth + Intent + Product Strategy (all rows assigned)**")
+        tier_strategy, tier_perf = build_tier_tables(out)
         st.dataframe(format_display_df(tier_strategy), use_container_width=True)
 
-        st.markdown("**🏁 Tiers by Growth + Intent + Performance Score (Top 10)**")
-        tier_perf = build_tier_table_perf(out)
+        st.markdown("**🏁 10 Action Tiers by Growth + Intent + Actual Performance (all rows assigned)**")
         st.dataframe(format_display_df(tier_perf), use_container_width=True)
 
         csv_bytes = out_show.to_csv(index=False).encode("utf-8")
