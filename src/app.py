@@ -577,12 +577,12 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
         "ROE", "Combined Ratio", "Performance",
         "ROE Proxy", "CR Proxy", "Performance Score",
         "Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy",
-        "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %",
+        "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %", "Total Cost Impact %",
     }
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
         "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
-        "Total Cost", "CPC Increase $",
+        "Total Cost", "CPC Increase $", "Expected Total Cost",
     }
 
     for c in out.columns:
@@ -780,23 +780,23 @@ def main() -> None:
         profit_weight = st.slider("Profitability weight", 0.0, 1.0, 0.30, 0.05)
 
         st.markdown("**Guardrails**")
-        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 40, 12, 1)
+        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 40, 25, 1)
         min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
-        min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.75, 0.01)
+        min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.65, 0.01)
         roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
 
         st.markdown("**Score Cutoffs**")
-        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.55, 0.01)
-        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.35, aggressive_cutoff), 0.01)
-        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.20, controlled_cutoff), 0.01)
+        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.45, 0.01)
+        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.30, aggressive_cutoff), 0.01)
+        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.15, controlled_cutoff), 0.01)
 
         st.markdown("**Strategy Max Adjustment (%)**")
-        max_adj_strongest = st.slider("Strongest Momentum cap", -10, 40, 20, 1)
-        max_adj_moderate = st.slider("Moderate Momentum cap", -10, 30, 12, 1)
-        max_adj_minimal = st.slider("Minimal Growth cap", -10, 20, 5, 1)
-        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 15, 5, 1)
+        max_adj_strongest = st.slider("Strongest Momentum cap", -10, 40, 30, 1)
+        max_adj_moderate = st.slider("Moderate Momentum cap", -10, 30, 20, 1)
+        max_adj_minimal = st.slider("Minimal Growth cap", -10, 20, 10, 1)
+        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 15, 8, 1)
 
         settings = Settings(
             max_cpc_increase_pct=max_cpc_increase_pct,
@@ -1039,25 +1039,44 @@ def main() -> None:
                 if state_channels.empty:
                     st.info("No channel-group rows found for this state.")
                 else:
-                    if "Total Click Cost" in state_channels.columns:
-                        state_channels["Total Cost"] = state_channels["Total Click Cost"]
+                    seg_options = sorted(state_channels["Segment"].dropna().unique().tolist())
+                    selected_seg = st.multiselect(
+                        "Filter channel groups by segment",
+                        options=seg_options,
+                        default=seg_options,
+                        key="tab1_cg_segment_filter",
+                    )
+                    state_channels = state_channels[state_channels["Segment"].isin(selected_seg)]
+                    if state_channels.empty:
+                        st.info("No channel groups for selected segment filter.")
                     else:
-                        state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
-                    state_channels["CPC Increase $"] = state_channels["Avg. CPC"] * state_channels["CPC Lift %"]
+                        if "Total Click Cost" in state_channels.columns:
+                            state_channels["Total Cost"] = state_channels["Total Click Cost"]
+                        else:
+                            state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
+                        state_channels["CPC Increase $"] = state_channels["Avg. CPC"] * state_channels["CPC Lift %"]
+                        state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["Expected Additional Cost"]
 
-                    cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
-                        Bids=("Bids", "sum"),
-                        SOV=("SOV", "mean"),
-                        **{"Win Rate": ("Bids to Clicks", "mean")},
-                        **{"Total Cost": ("Total Cost", "sum")},
-                        **{"Recommended Bid Adjustment": ("Applied Price Adjustment %", "median")},
-                        **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
-                        **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
-                        **{"CPC Lift %": ("CPC Lift %", "mean")},
-                        **{"CPC Increase $": ("CPC Increase $", "mean")},
-                    ).sort_values("Expected Additional Clicks", ascending=False)
+                        cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
+                            Bids=("Bids", "sum"),
+                            SOV=("SOV", "mean"),
+                            **{"Win Rate": ("Bids to Clicks", "mean")},
+                            **{"Total Cost": ("Total Cost", "sum")},
+                            **{"Expected Total Cost": ("Expected Total Cost", "sum")},
+                            **{"Expected Additional Cost": ("Expected Additional Cost", "sum")},
+                            **{"Recommended Bid Adjustment": ("Applied Price Adjustment %", "median")},
+                            **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
+                            **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
+                            **{"CPC Lift %": ("CPC Lift %", "mean")},
+                            **{"CPC Increase $": ("CPC Increase $", "mean")},
+                        ).sort_values("Expected Additional Clicks", ascending=False)
+                        cg_state["Total Cost Impact %"] = np.where(
+                            cg_state["Total Cost"] > 0,
+                            cg_state["Expected Additional Cost"] / cg_state["Total Cost"],
+                            0,
+                        )
 
-                    st.dataframe(format_display_df(cg_state), use_container_width=True)
+                        st.dataframe(format_display_df(cg_state), use_container_width=True)
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
