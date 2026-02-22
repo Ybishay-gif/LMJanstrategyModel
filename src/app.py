@@ -654,7 +654,28 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
             # Default for any numeric column not explicitly configured.
             column_config[c] = st.column_config.NumberColumn(c, format="%.0f")
 
-    st.dataframe(out, use_container_width=use_container_width, column_config=column_config)
+    try:
+        st.dataframe(out, use_container_width=use_container_width, column_config=column_config)
+    except Exception as exc:
+        err = str(exc)
+        # Guardrail for older/cached Streamlit builds that reject some printf tokens.
+        if "Failed to format the number" in err or "unexpected placeholder" in err:
+            safe_config = {}
+            for k, cfg in column_config.items():
+                if isinstance(cfg, st.column_config.NumberColumn):
+                    fmt = getattr(cfg, "format", None)
+                    if isinstance(fmt, str):
+                        fmt = fmt.replace(",", "")
+                        if fmt == "":
+                            fmt = "%.0f"
+                    else:
+                        fmt = "%.0f"
+                    safe_config[k] = st.column_config.NumberColumn(k, format=fmt)
+                else:
+                    safe_config[k] = cfg
+            st.dataframe(out, use_container_width=use_container_width, column_config=safe_config)
+        else:
+            raise
 
 
 def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str) -> pd.DataFrame:
