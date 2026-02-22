@@ -341,8 +341,22 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
         - settings.cpc_penalty_weight * np.maximum(out["CPC Lift %"].fillna(0), 0)
     )
 
-    feasible = out[out["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0].copy()
-    best = feasible.sort_values("Growth Opportunity Score", ascending=False).groupby("Channel Groups", as_index=False).first()
+    feasible = out[
+        (out["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0)
+        & (out["Price Adjustment Percent"].fillna(0) >= 0)
+        & (out["Clicks Lift %"].fillna(0) >= 0)
+    ].copy()
+    # Binds growth objective: prioritize click lift first (proxy for additional binds), then win-rate/growth score.
+    best = feasible.sort_values(
+        ["Clicks Lift %", "Win Rate Lift %", "Growth Opportunity Score"],
+        ascending=False,
+    ).groupby("Channel Groups", as_index=False).first()
+    # Ensure every channel group has a default baseline candidate.
+    baseline = out[out["Price Adjustment Percent"] == 0].copy()
+    if not baseline.empty:
+        missing = baseline[~baseline["Channel Groups"].isin(best["Channel Groups"])]
+        if not missing.empty:
+            best = pd.concat([best, missing], ignore_index=True)
 
     keep_cols = [
         "Channel Groups", "Price Adjustment Percent", "Growth Opportunity Score",
@@ -403,41 +417,83 @@ def build_model_tables(
 
     rec["Suggested Price Adjustment %"] = rec["Price Adjustment Percent"].fillna(0)
     rec["Growth Score"] = rec["Growth Opportunity Score"].fillna(0)
+    rec["Intent Score"] = (
+        0.60 * rec["Quote Start Rate"].fillna(0)
+        + 0.40 * rec["Clicks to Quotes"].fillna(0)
+    )
 
+    # Binds-growth oriented score: emphasize growth + intent + strategy, while still using profitability.
     rec["Composite Score"] = (
-        settings.growth_weight * rec["Growth Score"] + settings.profit_weight * rec["Performance Score"]
-    ) * rec["Strategy Scale"].fillna(0.5)
+        settings.growth_weight * rec["Growth Score"]
+        + settings.profit_weight * rec["Performance Score"]
+        + 0.25 * rec["Intent Score"].fillna(0)
+        + 0.20 * rec["Strategy Scale"].fillna(0.5)
+    )
 
+    rec.loc[rec["Composite Score"] >= settings.aggressive_cutoff, "Suggested Price Adjustment %"] = np.maximum(
+        rec["Suggested Price Adjustment %"], 10
+    )
     rec.loc[
         (rec["Composite Score"] >= settings.controlled_cutoff)
         & (rec["Composite Score"] < settings.aggressive_cutoff),
         "Suggested Price Adjustment %",
-    ] = np.minimum(rec["Suggested Price Adjustment %"], 10)
+    ] = np.maximum(np.minimum(rec["Suggested Price Adjustment %"], 10), 5)
     rec.loc[
         (rec["Composite Score"] >= settings.maintain_cutoff)
         & (rec["Composite Score"] < settings.controlled_cutoff),
         "Suggested Price Adjustment %",
     ] = 0
-    rec.loc[rec["Composite Score"] < settings.maintain_cutoff, "Suggested Price Adjustment %"] = -5
+    rec.loc[rec["Composite Score"] < settings.maintain_cutoff, "Suggested Price Adjustment %"] = 0
 
     rec["Strategy Max Adj %"] = rec["Strategy Bucket"].apply(lambda x: strategy_max_adjustment(x, settings))
     rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
 
-    rec["Intent Score"] = (
-        0.60 * rec["Quote Start Rate"].fillna(0)
-        + 0.40 * rec["Clicks to Quotes"].fillna(0)
-    )
     rec.loc[rec["Intent Score"] < settings.min_intent_for_scale, "Suggested Price Adjustment %"] = np.minimum(
-        rec["Suggested Price Adjustment %"], 0
+        rec["Suggested Price Adjustment %"], 5
     )
-    hard_pullback = (rec["ROE Proxy"] < settings.roe_pullback_floor) | (rec["CR Proxy"] > settings.cr_pullback_ceiling)
-    rec.loc[hard_pullback, "Suggested Price Adjustment %"] = -10
+    # Pull back only when both unit economics are materially weak.
+    hard_pullback = (rec["ROE Proxy"] < settings.roe_pullback_floor) & (rec["CR Proxy"] > settings.cr_pullback_ceiling)
+    rec.loc[hard_pullback, "Suggested Price Adjustment %"] = -5
+
+    # Growth-lane boost for momentum states with high intent.
+    growth_lane = (
+        rec["Strategy Bucket"].isin(["Strongest Momentum", "Moderate Momentum"])
+        & (rec["Intent Score"] >= 0.90)
+        & (rec["Growth Score"] > 0.05)
+    )
+    rec.loc[growth_lane, "Suggested Price Adjustment %"] = np.maximum(rec["Suggested Price Adjustment %"], 10)
+    rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
 
     rec = apply_price_effects(rec, price_eval_df)
     rec["Clicks Lift %"] = rec["Clicks Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
+    # Growth objective: do not apply positive/neutral adjustments that predict lower clicks.
+    no_growth = rec["Clicks Lift %"] < 0
+    rec.loc[no_growth, "Suggested Price Adjustment %"] = 0
+    rec.loc[no_growth, "Applied Price Adjustment %"] = 0
+    rec.loc[no_growth, "Clicks Lift %"] = 0
+    rec.loc[no_growth, "CPC Lift %"] = 0
 
-    rec["Expected Additional Clicks"] = rec["Clicks"] * rec["Clicks Lift %"]
+    rec["Test-based Additional Clicks"] = rec["Clicks"] * rec["Clicks Lift %"]
+    target_win_rate = rec["Strategy Bucket"].map(
+        {
+            "Strongest Momentum": 0.35,
+            "Moderate Momentum": 0.30,
+            "Minimal Growth": 0.24,
+            "LTV Constrained": 0.20,
+            "Closure Constrained": 0.20,
+            "Inactive/Low Spend": 0.15,
+        }
+    ).fillna(0.22)
+    fallback_win_rate = pd.Series(np.where(rec["Bids"] > 0, rec["Clicks"] / rec["Bids"], 0), index=rec.index)
+    current_win_rate = rec["Bids to Clicks"].combine_first(fallback_win_rate)
+    win_rate_headroom = np.maximum(target_win_rate - current_win_rate, 0)
+    adj_intensity = np.clip(rec["Applied Price Adjustment %"].fillna(0) / 10.0, 0, 2.0)
+    rec["Model-based Additional Clicks"] = rec["Bids"].fillna(0) * win_rate_headroom * adj_intensity
+    rec["Expected Additional Clicks"] = np.maximum(
+        rec["Test-based Additional Clicks"].fillna(0),
+        rec["Model-based Additional Clicks"].fillna(0),
+    )
     # After merges, channel-level and seg-level bind rates may coexist; use seg rate when reliable.
     channel_bind_rate = rec.get("Clicks to Binds")
     if channel_bind_rate is None:
@@ -610,28 +666,29 @@ def main() -> None:
             channel_state_path = st.text_input("Channel group x state data", value=DEFAULT_PATHS["channel_state"])
 
         st.header("Model Controls")
+        st.caption("Binds Growth Mode: calibrated to scale high-intent growth lanes and reduce fewer bids.")
         st.markdown("**Scoring Weights**")
-        growth_weight = st.slider("Growth weight", 0.0, 1.0, 0.55, 0.05)
-        profit_weight = st.slider("Profitability weight", 0.0, 1.0, 0.45, 0.05)
+        growth_weight = st.slider("Growth weight", 0.0, 1.0, 0.70, 0.05)
+        profit_weight = st.slider("Profitability weight", 0.0, 1.0, 0.30, 0.05)
 
         st.markdown("**Guardrails**")
         max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 40, 12, 1)
         min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
-        min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.92, 0.01)
-        roe_pullback_floor = st.slider("ROE pullback floor", -1.0, 0.5, -0.20, 0.01)
-        cr_pullback_ceiling = st.slider("Combined ratio pullback ceiling", 0.8, 1.5, 1.15, 0.01)
+        min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.75, 0.01)
+        roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
+        cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
 
         st.markdown("**Score Cutoffs**")
-        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.65, 0.01)
-        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.45, aggressive_cutoff), 0.01)
-        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.30, controlled_cutoff), 0.01)
+        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.55, 0.01)
+        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.35, aggressive_cutoff), 0.01)
+        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.20, controlled_cutoff), 0.01)
 
         st.markdown("**Strategy Max Adjustment (%)**")
         max_adj_strongest = st.slider("Strongest Momentum cap", -10, 40, 20, 1)
         max_adj_moderate = st.slider("Moderate Momentum cap", -10, 30, 12, 1)
         max_adj_minimal = st.slider("Minimal Growth cap", -10, 20, 5, 1)
-        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 15, 0, 1)
+        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 15, 5, 1)
 
         settings = Settings(
             max_cpc_increase_pct=max_cpc_increase_pct,
@@ -886,6 +943,16 @@ def main() -> None:
 
     with tabs[1]:
         st.subheader("📊 Channel Group Analysis")
+        current_binds = rec_df["Binds"].fillna(0).sum()
+        add_binds = rec_df["Expected Additional Binds"].fillna(0).sum()
+        expected_total_binds = current_binds + add_binds
+        binds_multiplier = expected_total_binds / current_binds if current_binds > 0 else np.nan
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Current Binds", f"{current_binds:,.0f}")
+        d2.metric("Expected Additional Binds", f"{add_binds:,.0f}")
+        d3.metric("Projected Binds Multiplier", "n/a" if pd.isna(binds_multiplier) else f"{binds_multiplier:.2f}x")
+        if not pd.isna(binds_multiplier):
+            st.caption(f"Progress to 2.0x binds goal: {min(100, max(0, binds_multiplier / 2.0 * 100)):.1f}%")
 
         f_col1, f_col2, f_col3 = st.columns(3)
         states = sorted(rec_df["State"].dropna().unique().tolist())
