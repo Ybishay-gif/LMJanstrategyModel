@@ -582,7 +582,7 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
         "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
-        "Total Cost", "CPC Increase $", "Expected Total Cost",
+        "Total Cost", "CPC Increase $", "Expected Total Cost", "Additional Budget Required",
     }
 
     for c in out.columns:
@@ -998,11 +998,18 @@ def main() -> None:
                 on=["State", "Segment"],
                 how="left",
             )
+            seg_costs = rec_df[rec_df["State"] == selected_state].groupby("Segment", as_index=False).agg(
+                Bids=("Bids", "sum"),
+                **{"Avg. CPC": ("Avg. CPC", "mean")},
+                **{"Additional Budget Required": ("Expected Additional Cost", "sum")},
+            )
+            seg_view = seg_view.merge(seg_costs, on="Segment", how="left")
             seg_view["Expected_Additional_Clicks"] = seg_view["Expected_Additional_Clicks"].fillna(0)
             seg_view["Expected_Additional_Binds"] = seg_view["Expected_Additional_Binds"].fillna(0)
+            seg_view["Additional Budget Required"] = seg_view["Additional Budget Required"].fillna(0)
 
             with st.container(border=True):
-                st.subheader(f"🔎 State Deep Dive: {selected_state}")
+                st.subheader(f"🔎 State Deep Dive: {selected_state}  |  Strategy: {row['Strategy Bucket'].iloc[0]}")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("💸 ROE", f"{row['ROE'].iloc[0]:.1%}")
                 c2.metric("⚖️ Combined Ratio", f"{row['Combined Ratio'].iloc[0]:.1%}")
@@ -1026,8 +1033,8 @@ def main() -> None:
 
                 st.markdown("**🧩 Per-Segment KPI + Opportunity**")
                 seg_show = seg_view[[
-                    "Segment", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
-                    "Expected_Additional_Clicks", "Expected_Additional_Binds"
+                    "Segment", "Bids", "Avg. CPC", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
+                    "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 st.dataframe(
                     format_display_df(seg_show),
