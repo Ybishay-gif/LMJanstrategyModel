@@ -1075,6 +1075,7 @@ def _tier_catalog_performance_split() -> pd.DataFrame:
 
 def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     t = rec.copy()
+    t["Performance Group"] = t["Data Performance Group"].fillna("Low Sig - Review")
     t["Add Clicks per 1K Bids"] = np.where(
         t["Bids"].fillna(0) > 0,
         1000.0 * t["Expected Additional Clicks"].fillna(0) / t["Bids"].fillna(0),
@@ -1085,7 +1086,6 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
         .apply(lambda s: quantile_bucket(s.fillna(0), ["Low", "High"]))
     )
     t["Intent Tier"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "High"])
-    t["Performance Group"] = t["Data Performance Group"].fillna("Low Sig - Review")
 
     catalog = _tier_catalog_performance_split()
     tier_map = {
