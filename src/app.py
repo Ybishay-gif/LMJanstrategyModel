@@ -782,6 +782,8 @@ def main() -> None:
         default_state = state_list[0] if state_list else None
         if "selected_state_map" not in st.session_state:
             st.session_state["selected_state_map"] = default_state
+        if "tab1_state_popup" not in st.session_state:
+            st.session_state["tab1_state_popup"] = default_state
 
         if isinstance(event, dict):
             pts = event.get("selection", {}).get("points", [])
@@ -806,11 +808,17 @@ def main() -> None:
                             break
                 if clicked_state in state_list:
                     st.session_state["selected_state_map"] = clicked_state
+                    st.session_state["tab1_state_popup"] = clicked_state
+
+        # Keep selectbox value valid whenever the available state list changes.
+        if state_list and st.session_state.get("tab1_state_popup") not in state_list:
+            st.session_state["tab1_state_popup"] = state_list[0]
+            st.session_state["selected_state_map"] = state_list[0]
 
         selected_state = st.selectbox(
             "Select state for detailed popup",
             options=state_list,
-            index=state_list.index(st.session_state["selected_state_map"]) if state_list and st.session_state["selected_state_map"] in state_list else 0,
+            index=state_list.index(st.session_state["tab1_state_popup"]) if state_list and st.session_state["tab1_state_popup"] in state_list else 0,
             key="tab1_state_popup",
         )
         st.session_state["selected_state_map"] = selected_state
