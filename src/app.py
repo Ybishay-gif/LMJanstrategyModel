@@ -1126,24 +1126,21 @@ def main() -> None:
             scope="usa",
             color="Strategy Bucket",
             color_discrete_map=STRATEGY_COLOR,
+            custom_data=[
+                "Strategy Bucket",
+                "Indicator",
+                "Conflict Label",
+                "ROE Display",
+                "CR Display",
+                "Perf Display",
+                "Binds Display",
+                "LTV Display",
+                "Add Clicks Display",
+                "Add Binds Display",
+            ],
             title="US Map: Strategy Bucket + State KPIs",
         )
         fig.update_traces(
-            customdata=np.stack(
-                [
-                    map_df["Strategy Bucket"].astype(str),
-                    map_df["Indicator"].astype(str),
-                    map_df["Conflict Label"].astype(str),
-                    map_df["ROE Display"].astype(str),
-                    map_df["CR Display"].astype(str),
-                    map_df["Perf Display"].astype(str),
-                    map_df["Binds Display"].astype(str),
-                    map_df["LTV Display"].astype(str),
-                    map_df["Add Clicks Display"].astype(str),
-                    map_df["Add Binds Display"].astype(str),
-                ],
-                axis=-1,
-            ),
             hovertemplate=(
                 "<b style='font-size:15px;'>%{location}</b><br>"
                 "<span style='opacity:0.88;'>%{customdata[0]}</span><br>"
