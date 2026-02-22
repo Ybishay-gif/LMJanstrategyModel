@@ -644,6 +644,19 @@ def build_model_tables(
     )
     rec.loc[~rec["Has Sig Price Evidence"], "Recommendation"] = "No Sig Test - Hold"
 
+    perf_group_row = rec.apply(
+        lambda r: classify_perf_group(
+            r.get("ROE Proxy", np.nan),
+            r.get("CR Proxy", np.nan),
+            r.get("Perf Proxy", np.nan),
+            r.get("Binds", np.nan),
+            settings.min_binds_perf_sig,
+        ),
+        axis=1,
+    )
+    rec["Data Performance Group"] = perf_group_row.map(lambda x: x[0])
+    rec["Data Performance Sig"] = perf_group_row.map(lambda x: x[1])
+
     state_extra = rec.groupby("State", as_index=False).agg(
         Expected_Additional_Clicks=("Expected Additional Clicks", "sum"),
         Expected_Additional_Binds=("Expected Additional Binds", "sum"),
@@ -930,6 +943,120 @@ def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
             "Tier Number",
             "Tier Name",
             "Strategy Bucket",
+            "Growth Tier",
+            "Intent Tier",
+            "State",
+            "Channel Groups",
+            "Segment",
+            "Bids",
+            "Clicks",
+            "Expected Additional Clicks",
+            "Expected Additional Binds",
+            "Suggested Price Adjustment %",
+            "Applied Price Adjustment %",
+            "Growth Score",
+            "Intent Score",
+            "Composite Score",
+        ]
+    ].sort_values(["Tier Number", "Expected Additional Binds"], ascending=[True, False])
+
+    return summary, detail
+
+
+PERF_GROUP_ORDER = [
+    "Top Performance",
+    "Strong Performance",
+    "Balanced",
+    "Mixed Risk",
+    "Weak Performance",
+    "Poor Performance",
+    "Low Sig - Review",
+]
+
+
+def _tier_catalog_performance_split() -> pd.DataFrame:
+    rows = []
+    n = 1
+    for perf_group in PERF_GROUP_ORDER:
+        for growth in ["High", "Low"]:
+            for intent in ["High", "Low"]:
+                rows.append(
+                    {
+                        "Tier Number": n,
+                        "Performance Group": perf_group,
+                        "Growth Tier": growth,
+                        "Intent Tier": intent,
+                        "Tier Name": f"T{n} {perf_group} | {growth} Growth | {intent} Intent",
+                    }
+                )
+                n += 1
+    return pd.DataFrame(rows)
+
+
+def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    t = rec.copy()
+    t["Growth Tier"] = quantile_bucket(t["Expected Additional Clicks"].fillna(0), ["Low", "High"])
+    t["Intent Tier"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "High"])
+    t["Performance Group"] = t["Data Performance Group"].fillna("Low Sig - Review")
+
+    catalog = _tier_catalog_performance_split()
+    tier_map = {
+        (r["Performance Group"], r["Growth Tier"], r["Intent Tier"]): int(r["Tier Number"])
+        for _, r in catalog.iterrows()
+    }
+    t["Tier Number"] = t.apply(
+        lambda r: tier_map.get((r["Performance Group"], r["Growth Tier"], r["Intent Tier"]), len(catalog)),
+        axis=1,
+    )
+    t = t.merge(catalog[["Tier Number", "Tier Name"]], on="Tier Number", how="left")
+
+    summary = (
+        t.groupby(
+            ["Tier Number", "Tier Name", "Performance Group", "Growth Tier", "Intent Tier"],
+            as_index=False,
+        )
+        .agg(
+            Rows=("Channel Groups", "count"),
+            States=("State", lambda x: ", ".join(sorted(set(x)))),
+            Sub_Channels=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
+            Segments=("Segment", lambda x: ", ".join(sorted(set(x)))),
+            Additional_Clicks=("Expected Additional Clicks", "sum"),
+            Additional_Binds=("Expected Additional Binds", "sum"),
+            Current_Binds=("Binds", "sum"),
+        )
+    )
+    summary = catalog.merge(
+        summary,
+        on=["Tier Number", "Tier Name", "Performance Group", "Growth Tier", "Intent Tier"],
+        how="left",
+    ).sort_values("Tier Number")
+    for c in ["States", "Sub_Channels", "Segments"]:
+        summary[c] = summary[c].fillna("n/a")
+    for c in ["Rows", "Additional_Clicks", "Additional_Binds", "Current_Binds"]:
+        summary[c] = summary[c].fillna(0.0)
+
+    summary = summary[
+        [
+            "Tier Number",
+            "Tier Name",
+            "Performance Group",
+            "Growth Tier",
+            "Intent Tier",
+            "Rows",
+            "Additional_Clicks",
+            "Additional_Binds",
+            "Current_Binds",
+            "States",
+            "Sub_Channels",
+            "Segments",
+        ]
+    ]
+
+    detail = t[
+        [
+            "Tier Number",
+            "Tier Name",
+            "Performance Group",
             "Growth Tier",
             "Intent Tier",
             "State",
@@ -1527,6 +1654,13 @@ def main() -> None:
 
         st.markdown("**🔎 Sub-tier Details (state + sub channel rows)**")
         render_formatted_table(tier_detail, use_container_width=True)
+
+        st.markdown("**🏁 Data-Performance Tiers: 1 performance group + Growth (High/Low) + Intent (High/Low)**")
+        perf_tier_summary, perf_tier_detail = build_performance_tiers(out)
+        render_formatted_table(perf_tier_summary, use_container_width=True)
+
+        st.markdown("**🔎 Data-Performance Sub-tier Details (state + sub channel rows)**")
+        render_formatted_table(perf_tier_detail, use_container_width=True)
 
         csv_bytes = out_show.to_csv(index=False).encode("utf-8")
         st.download_button(
