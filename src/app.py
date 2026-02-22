@@ -930,6 +930,7 @@ def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     fill_num = ["Rows", "Additional_Clicks", "Additional_Binds", "Current_Binds"]
     for c in fill_num:
         summary[c] = summary[c].fillna(0.0)
+    summary = summary[summary["Rows"] > 0].copy()
 
     summary = summary[
         [
@@ -1044,6 +1045,7 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
         summary[c] = summary[c].fillna("n/a")
     for c in ["Rows", "Additional_Clicks", "Additional_Binds", "Current_Binds"]:
         summary[c] = summary[c].fillna(0.0)
+    summary = summary[summary["Rows"] > 0].copy()
 
     summary = summary[
         [
