@@ -46,6 +46,22 @@ PERFORMANCE_GROUP_COLOR = {
     "Low Sig - Review": "#94A3B8",
 }
 
+STATE_CENTER = {
+    "AL": (32.7, -86.7), "AK": (64.2, -149.5), "AZ": (34.3, -111.7), "AR": (34.9, -92.4),
+    "CA": (37.3, -119.7), "CO": (39.0, -105.5), "CT": (41.6, -72.7), "DE": (39.0, -75.5),
+    "FL": (27.8, -81.7), "GA": (32.7, -83.3), "HI": (20.8, -157.5), "ID": (44.1, -114.7),
+    "IL": (40.0, -89.2), "IN": (40.0, -86.1), "IA": (42.1, -93.5), "KS": (38.5, -98.0),
+    "KY": (37.5, -85.3), "LA": (31.2, -92.3), "ME": (45.2, -69.0), "MD": (39.0, -76.7),
+    "MA": (42.3, -71.8), "MI": (44.3, -85.6), "MN": (46.4, -94.6), "MS": (32.7, -89.7),
+    "MO": (38.6, -92.6), "MT": (46.9, -110.0), "NE": (41.5, -99.8), "NV": (38.8, -116.4),
+    "NH": (43.7, -71.6), "NJ": (40.1, -74.7), "NM": (34.5, -106.1), "NY": (42.9, -75.0),
+    "NC": (35.5, -79.4), "ND": (47.5, -100.5), "OH": (40.3, -82.8), "OK": (35.6, -97.5),
+    "OR": (44.0, -120.5), "PA": (41.0, -77.5), "RI": (41.7, -71.6), "SC": (33.8, -80.9),
+    "SD": (44.5, -100.2), "TN": (35.8, -86.4), "TX": (31.5, -99.3), "UT": (39.3, -111.7),
+    "VT": (44.1, -72.7), "VA": (37.5, -78.7), "WA": (47.4, -120.7), "WV": (38.6, -80.6),
+    "WI": (44.5, -89.8), "WY": (43.0, -107.6), "DC": (38.9, -77.0),
+}
+
 DARK_CSS = """
 <style>
 :root {
@@ -1269,17 +1285,22 @@ def main() -> None:
 
         map_mode = st.radio(
             "Map color mode",
-            options=["Product Strategy", "Performance Group"],
+            options=["Product Strategy", "Performance Group", "Conflict Highlight"],
             horizontal=True,
             key="tab1_map_color_mode",
         )
-        map_color_col = "Strategy Bucket" if map_mode == "Product Strategy" else "ROE Performance Group"
-        map_color_map = STRATEGY_COLOR if map_mode == "Product Strategy" else PERFORMANCE_GROUP_COLOR
-        map_title = (
-            "US Map: Product Strategy + State KPIs"
-            if map_mode == "Product Strategy"
-            else "US Map: Performance Group + State KPIs"
-        )
+        if map_mode == "Product Strategy":
+            map_color_col = "Strategy Bucket"
+            map_color_map = STRATEGY_COLOR
+            map_title = "US Map: Product Strategy + State KPIs"
+        elif map_mode == "Performance Group":
+            map_color_col = "ROE Performance Group"
+            map_color_map = PERFORMANCE_GROUP_COLOR
+            map_title = "US Map: Performance Group + State KPIs"
+        else:
+            map_color_col = "ROE Performance Group"
+            map_color_map = PERFORMANCE_GROUP_COLOR
+            map_title = "US Map: Conflict Highlight (full/dots/stripes by conflict level)"
 
         fig = px.choropleth(
             map_df,
@@ -1330,6 +1351,39 @@ def main() -> None:
                 align="left",
             ),
         )
+
+        if map_mode == "Conflict Highlight":
+            ctr = map_df["State"].map(STATE_CENTER)
+            map_df["lat"] = ctr.map(lambda x: x[0] if isinstance(x, tuple) else np.nan)
+            map_df["lon"] = ctr.map(lambda x: x[1] if isinstance(x, tuple) else np.nan)
+            small_conf = map_df[(map_df["Conflict Level"] == "Small Conflict") & map_df["lat"].notna()].copy()
+            high_conf = map_df[(map_df["Conflict Level"] == "High Conflict") & map_df["lat"].notna()].copy()
+
+            for g, col in PERFORMANCE_GROUP_COLOR.items():
+                s = small_conf[small_conf["ROE Performance Group"] == g]
+                if not s.empty:
+                    fig.add_scattergeo(
+                        lat=s["lat"],
+                        lon=s["lon"],
+                        mode="markers",
+                        marker=dict(size=7, color=col, line=dict(color="white", width=0.7)),
+                        name=f"{g} · Small Conflict",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    )
+                h = high_conf[high_conf["ROE Performance Group"] == g]
+                if not h.empty:
+                    fig.add_scattergeo(
+                        lat=h["lat"],
+                        lon=h["lon"],
+                        mode="text",
+                        text=["////"] * len(h),
+                        textfont=dict(size=10, color=col),
+                        name=f"{g} · High Conflict",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    )
+            st.caption("Conflict mode: Full Match = full fill, Small Conflict = dotted overlay, High Conflict = stripe-style overlay.")
 
         event = st.plotly_chart(
             fig,
