@@ -189,8 +189,12 @@ def apply_price_effects(
         if g is None or g.empty:
             return pd.Series([row["Suggested Price Adjustment %"], 0.0, 0.0, 0.0])
         target = row["Suggested Price Adjustment %"]
-        idx = (g["Price Adjustment Percent"] - target).abs().idxmin()
-        near = g.loc[idx]
+        # Growth mode: snap upward to the next tested adjustment when possible.
+        up = g[g["Price Adjustment Percent"] >= target]
+        if not up.empty:
+            near = up.sort_values("Price Adjustment Percent").iloc[0]
+        else:
+            near = g.sort_values("Price Adjustment Percent").iloc[-1]
         return pd.Series(
             [
                 near["Price Adjustment Percent"],
@@ -438,19 +442,19 @@ def build_model_tables(
     )
 
     rec.loc[rec["Composite Score"] >= settings.aggressive_cutoff, "Suggested Price Adjustment %"] = np.maximum(
-        rec["Suggested Price Adjustment %"], 10
+        rec["Suggested Price Adjustment %"], 20
     )
     rec.loc[
         (rec["Composite Score"] >= settings.controlled_cutoff)
         & (rec["Composite Score"] < settings.aggressive_cutoff),
         "Suggested Price Adjustment %",
-    ] = np.maximum(np.minimum(rec["Suggested Price Adjustment %"], 10), 5)
+    ] = np.maximum(np.minimum(rec["Suggested Price Adjustment %"], 15), 10)
     rec.loc[
         (rec["Composite Score"] >= settings.maintain_cutoff)
         & (rec["Composite Score"] < settings.controlled_cutoff),
         "Suggested Price Adjustment %",
-    ] = 0
-    rec.loc[rec["Composite Score"] < settings.maintain_cutoff, "Suggested Price Adjustment %"] = 0
+    ] = 10
+    rec.loc[rec["Composite Score"] < settings.maintain_cutoff, "Suggested Price Adjustment %"] = 5
 
     rec["Strategy Max Adj %"] = rec["Strategy Bucket"].apply(lambda x: strategy_max_adjustment(x, settings))
     rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
@@ -468,7 +472,7 @@ def build_model_tables(
         & (rec["Intent Score"] >= 0.90)
         & (rec["Growth Score"] > 0.05)
     )
-    rec.loc[growth_lane, "Suggested Price Adjustment %"] = np.maximum(rec["Suggested Price Adjustment %"], 10)
+    rec.loc[growth_lane, "Suggested Price Adjustment %"] = np.maximum(rec["Suggested Price Adjustment %"], 20)
     rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
 
     rec = apply_price_effects(rec, price_eval_df)
@@ -582,7 +586,7 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
         "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
-        "Total Cost", "CPC Increase $", "Expected Total Cost", "Additional Budget Required",
+        "Total Cost", "Expected Total Cost", "Additional Budget Required", "CPC Impact Cost",
     }
 
     for c in out.columns:
@@ -788,9 +792,9 @@ def main() -> None:
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
 
         st.markdown("**Score Cutoffs**")
-        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.45, 0.01)
-        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.30, aggressive_cutoff), 0.01)
-        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.15, controlled_cutoff), 0.01)
+        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.40, 0.01)
+        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.25, aggressive_cutoff), 0.01)
+        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.10, controlled_cutoff), 0.01)
 
         st.markdown("**Strategy Max Adjustment (%)**")
         max_adj_strongest = st.slider("Strongest Momentum cap", -10, 40, 30, 1)
@@ -1061,8 +1065,9 @@ def main() -> None:
                             state_channels["Total Cost"] = state_channels["Total Click Cost"]
                         else:
                             state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
-                        state_channels["CPC Increase $"] = state_channels["Avg. CPC"] * state_channels["CPC Lift %"]
-                        state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["Expected Additional Cost"]
+                        # Show transparent CPC-only cost impact for the recommended adjustment.
+                        state_channels["CPC Impact Cost"] = state_channels["Total Cost"] * state_channels["CPC Lift %"]
+                        state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["CPC Impact Cost"]
 
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
                             Bids=("Bids", "sum"),
@@ -1070,16 +1075,15 @@ def main() -> None:
                             **{"Win Rate": ("Bids to Clicks", "mean")},
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
-                            **{"Expected Additional Cost": ("Expected Additional Cost", "sum")},
+                            **{"CPC Impact Cost": ("CPC Impact Cost", "sum")},
                             **{"Recommended Bid Adjustment": ("Applied Price Adjustment %", "median")},
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
                             **{"CPC Lift %": ("CPC Lift %", "mean")},
-                            **{"CPC Increase $": ("CPC Increase $", "mean")},
                         ).sort_values("Expected Additional Clicks", ascending=False)
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
-                            cg_state["Expected Additional Cost"] / cg_state["Total Cost"],
+                            cg_state["CPC Impact Cost"] / cg_state["Total Cost"],
                             0,
                         )
 
