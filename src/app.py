@@ -1088,7 +1088,7 @@ def main() -> None:
                     "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 st.dataframe(
-                    format_display_df(seg_show),
+                    seg_show,
                     use_container_width=True,
                 )
 
@@ -1157,7 +1157,7 @@ def main() -> None:
                             0,
                         )
 
-                        st.dataframe(format_display_df(cg_state), use_container_width=True)
+                        st.dataframe(cg_state, use_container_width=True)
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
@@ -1170,7 +1170,7 @@ def main() -> None:
         )
         indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
         st.dataframe(
-            format_display_df(indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance"]]),
+            indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance"]],
             use_container_width=True,
         )
 
@@ -1273,7 +1273,7 @@ def main() -> None:
         ]
         show_cols = [c for c in show_cols if c in grp.columns]
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
-        st.dataframe(format_display_df(grp), use_container_width=True)
+        st.dataframe(grp, use_container_width=True)
 
     with tabs[2]:
         st.subheader("🧠 Channel Group + State Recommendations")
@@ -1308,7 +1308,7 @@ def main() -> None:
 
         st.dataframe(
             styled_table(
-                format_display_df(out_show),
+                out_show,
                 perf_cols=["Performance Score", "ROE Proxy", "CR Proxy", "MRLTV Proxy"],
                 strategy_cols=["Strategy Bucket", "Composite Score", "Recommendation"],
             ),
@@ -1317,10 +1317,10 @@ def main() -> None:
 
         st.markdown("**🏷️ 10 Action Tiers by Growth + Intent + Product Strategy (all rows assigned)**")
         tier_strategy, tier_perf = build_tier_tables(out)
-        st.dataframe(format_display_df(tier_strategy), use_container_width=True)
+        st.dataframe(tier_strategy, use_container_width=True)
 
         st.markdown("**🏁 10 Action Tiers by Growth + Intent + Actual Performance (all rows assigned)**")
-        st.dataframe(format_display_df(tier_perf), use_container_width=True)
+        st.dataframe(tier_perf, use_container_width=True)
 
         csv_bytes = out_show.to_csv(index=False).encode("utf-8")
         st.download_button(
