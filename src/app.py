@@ -904,7 +904,15 @@ def _tier_catalog_strategy_split() -> pd.DataFrame:
 
 def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     t = rec.copy()
-    t["Growth Tier"] = quantile_bucket(t["Expected Additional Clicks"].fillna(0), ["Low", "High"])
+    t["Add Clicks per 1K Bids"] = np.where(
+        t["Bids"].fillna(0) > 0,
+        1000.0 * t["Expected Additional Clicks"].fillna(0) / t["Bids"].fillna(0),
+        0.0,
+    )
+    t["Growth Tier"] = (
+        t.groupby("Strategy Bucket", group_keys=False)["Add Clicks per 1K Bids"]
+        .apply(lambda s: quantile_bucket(s.fillna(0), ["Low", "High"]))
+    )
     t["Intent Tier"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "High"])
 
     catalog = _tier_catalog_strategy_split()
@@ -927,6 +935,7 @@ def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
             Rows=("Channel Groups", "count"),
             Bids=("Bids", "sum"),
             Clicks=("Clicks", "sum"),
+            Growth_per_1K_Bids=("Add Clicks per 1K Bids", "mean"),
             States=("State", lambda x: ", ".join(sorted(set(x)))),
             Sub_Channels=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
             Segments=("Segment", lambda x: ", ".join(sorted(set(x)))),
@@ -945,7 +954,7 @@ def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     fill_text = ["States", "Sub_Channels", "Segments"]
     for c in fill_text:
         summary[c] = summary[c].fillna("n/a")
-    fill_num = ["Rows", "Bids", "Clicks", "Additional_Clicks", "Additional_Binds", "Current_Binds"]
+    fill_num = ["Rows", "Bids", "Clicks", "Growth_per_1K_Bids", "Additional_Clicks", "Additional_Binds", "Current_Binds"]
     for c in fill_num:
         summary[c] = summary[c].fillna(0.0)
     summary = summary[summary["Rows"] > 0].copy()
@@ -960,6 +969,7 @@ def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
             "Rows",
             "Bids",
             "Clicks",
+            "Growth_per_1K_Bids",
             "Additional_Clicks",
             "Additional_Binds",
             "Current_Binds",
@@ -981,6 +991,7 @@ def build_strategy_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
             "Segment",
             "Bids",
             "Clicks",
+            "Add Clicks per 1K Bids",
             "Expected Additional Clicks",
             "Expected Additional Binds",
             "Suggested Price Adjustment %",
@@ -1026,7 +1037,15 @@ def _tier_catalog_performance_split() -> pd.DataFrame:
 
 def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     t = rec.copy()
-    t["Growth Tier"] = quantile_bucket(t["Expected Additional Clicks"].fillna(0), ["Low", "High"])
+    t["Add Clicks per 1K Bids"] = np.where(
+        t["Bids"].fillna(0) > 0,
+        1000.0 * t["Expected Additional Clicks"].fillna(0) / t["Bids"].fillna(0),
+        0.0,
+    )
+    t["Growth Tier"] = (
+        t.groupby("Performance Group", group_keys=False)["Add Clicks per 1K Bids"]
+        .apply(lambda s: quantile_bucket(s.fillna(0), ["Low", "High"]))
+    )
     t["Intent Tier"] = quantile_bucket(t["Intent Score"].fillna(0), ["Low", "High"])
     t["Performance Group"] = t["Data Performance Group"].fillna("Low Sig - Review")
 
@@ -1050,6 +1069,7 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
             Rows=("Channel Groups", "count"),
             Bids=("Bids", "sum"),
             Clicks=("Clicks", "sum"),
+            Growth_per_1K_Bids=("Add Clicks per 1K Bids", "mean"),
             States=("State", lambda x: ", ".join(sorted(set(x)))),
             Sub_Channels=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
             Segments=("Segment", lambda x: ", ".join(sorted(set(x)))),
@@ -1065,7 +1085,7 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     ).sort_values("Tier Number")
     for c in ["States", "Sub_Channels", "Segments"]:
         summary[c] = summary[c].fillna("n/a")
-    for c in ["Rows", "Bids", "Clicks", "Additional_Clicks", "Additional_Binds", "Current_Binds"]:
+    for c in ["Rows", "Bids", "Clicks", "Growth_per_1K_Bids", "Additional_Clicks", "Additional_Binds", "Current_Binds"]:
         summary[c] = summary[c].fillna(0.0)
     summary = summary[summary["Rows"] > 0].copy()
 
@@ -1079,6 +1099,7 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
             "Rows",
             "Bids",
             "Clicks",
+            "Growth_per_1K_Bids",
             "Additional_Clicks",
             "Additional_Binds",
             "Current_Binds",
@@ -1100,6 +1121,7 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
             "Segment",
             "Bids",
             "Clicks",
+            "Add Clicks per 1K Bids",
             "Expected Additional Clicks",
             "Expected Additional Binds",
             "Suggested Price Adjustment %",
