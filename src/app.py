@@ -623,6 +623,12 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
         "Total Cost", "Expected Total Cost", "Additional Budget Required", "Additional Budget Needed",
         "Current Cost", "Actual CPB", "Expected CPB", "Target CPB (avg)", "CPC Impact Cost",
     }
+    count_cols = {
+        "Bids", "Clicks", "Binds", "Current Binds", "Expected Binds",
+        "Expected Additional Clicks", "Expected Additional Binds",
+        "Additional Clicks", "Additional Binds", "Rows",
+    }
+    precise_currency_cols = {"Avg. Bid", "Avg. CPC"}
 
     for c in out.columns:
         if c in ratio_pct_cols and pd.api.types.is_numeric_dtype(out[c]):
@@ -631,7 +637,12 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
         elif c in point_pct_cols and pd.api.types.is_numeric_dtype(out[c]):
             column_config[c] = st.column_config.NumberColumn(c, format="%+.0f%%")
         elif c in currency_cols and pd.api.types.is_numeric_dtype(out[c]):
-            column_config[c] = st.column_config.NumberColumn(c, format="$%.0f")
+            if c in precise_currency_cols:
+                column_config[c] = st.column_config.NumberColumn(c, format="$%.2f")
+            else:
+                column_config[c] = st.column_config.NumberColumn(c, format="$%,.0f")
+        elif c in count_cols and pd.api.types.is_numeric_dtype(out[c]):
+            column_config[c] = st.column_config.NumberColumn(c, format="%,.0f")
 
     st.dataframe(out, use_container_width=use_container_width, column_config=column_config)
 
