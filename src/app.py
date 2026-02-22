@@ -112,6 +112,10 @@ def read_csv(path: str) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def read_state_strategy(path: str) -> pd.DataFrame:
     raw = Path(path).read_text(errors="ignore")
+    return parse_state_strategy_text(raw)
+
+
+def parse_state_strategy_text(raw: str) -> pd.DataFrame:
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
 
     if len(lines) >= 2 and lines[0].lower() == "state":
@@ -505,12 +509,31 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Data Paths")
-        strategy_path = st.text_input("State strategy", value=DEFAULT_PATHS["state_strategy"])
-        state_path = st.text_input("State data", value=DEFAULT_PATHS["state_data"])
-        state_seg_path = st.text_input("State-segment data", value=DEFAULT_PATHS["state_seg"])
-        channel_group_path = st.text_input("Channel group data", value=DEFAULT_PATHS["channel_group"])
-        price_path = st.text_input("Price exploration data", value=DEFAULT_PATHS["channel_price_exp"])
-        channel_state_path = st.text_input("Channel group x state data", value=DEFAULT_PATHS["channel_state"])
+        data_mode = st.radio(
+            "Data source mode",
+            options=["Upload files (Cloud)", "Local paths (Desktop)"],
+            index=0,
+        )
+
+        strategy_upload = state_upload = state_seg_upload = None
+        channel_group_upload = price_upload = channel_state_upload = None
+        strategy_path = state_path = state_seg_path = ""
+        channel_group_path = price_path = channel_state_path = ""
+
+        if data_mode == "Upload files (Cloud)":
+            strategy_upload = st.file_uploader("State strategy file", type=None)
+            state_upload = st.file_uploader("State data CSV", type=["csv"])
+            state_seg_upload = st.file_uploader("State-segment CSV", type=["csv"])
+            channel_group_upload = st.file_uploader("Channel group CSV", type=["csv"])
+            price_upload = st.file_uploader("Price exploration CSV", type=["csv"])
+            channel_state_upload = st.file_uploader("Channel group x state CSV", type=["csv"])
+        else:
+            strategy_path = st.text_input("State strategy", value=DEFAULT_PATHS["state_strategy"])
+            state_path = st.text_input("State data", value=DEFAULT_PATHS["state_data"])
+            state_seg_path = st.text_input("State-segment data", value=DEFAULT_PATHS["state_seg"])
+            channel_group_path = st.text_input("Channel group data", value=DEFAULT_PATHS["channel_group"])
+            price_path = st.text_input("Price exploration data", value=DEFAULT_PATHS["channel_price_exp"])
+            channel_state_path = st.text_input("Channel group x state data", value=DEFAULT_PATHS["channel_state"])
 
         st.header("Model Controls")
         st.markdown("**Scoring Weights**")
@@ -560,12 +583,29 @@ def main() -> None:
         return
 
     try:
-        strategy_df = read_state_strategy(strategy_path)
-        state_raw = read_csv(state_path)
-        state_seg_raw = read_csv(state_seg_path)
-        _ = read_csv(channel_group_path)
-        price_raw = read_csv(price_path)
-        channel_state_raw = read_csv(channel_state_path)
+        if data_mode == "Upload files (Cloud)":
+            required_uploads = [
+                strategy_upload, state_upload, state_seg_upload,
+                channel_group_upload, price_upload, channel_state_upload,
+            ]
+            if any(x is None for x in required_uploads):
+                st.error("Please upload all six files in the sidebar, then click Run.")
+                return
+
+            strategy_text = strategy_upload.getvalue().decode("utf-8", errors="ignore")
+            strategy_df = parse_state_strategy_text(strategy_text)
+            state_raw = pd.read_csv(state_upload)
+            state_seg_raw = pd.read_csv(state_seg_upload)
+            _ = pd.read_csv(channel_group_upload)
+            price_raw = pd.read_csv(price_upload)
+            channel_state_raw = pd.read_csv(channel_state_upload)
+        else:
+            strategy_df = read_state_strategy(strategy_path)
+            state_raw = read_csv(state_path)
+            state_seg_raw = read_csv(state_seg_path)
+            _ = read_csv(channel_group_path)
+            price_raw = read_csv(price_path)
+            channel_state_raw = read_csv(channel_state_path)
     except Exception as exc:
         st.error(f"Failed to load data: {exc}")
         return
