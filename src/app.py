@@ -102,6 +102,9 @@ class Settings:
     max_adj_moderate: float
     max_adj_minimal: float
     max_adj_constrained: float
+    min_clicks_intent_sig: int
+    min_bids_price_sig: int
+    min_clicks_price_sig: int
 
 
 @st.cache_data(show_spinner=False)
@@ -174,8 +177,11 @@ def strategy_max_adjustment(bucket: str, settings: Settings) -> float:
 def apply_price_effects(
     rec: pd.DataFrame, price_eval_df: pd.DataFrame
 ) -> pd.DataFrame:
+    px = price_eval_df.copy()
+    if "Stat Sig Price Point" in px.columns:
+        px = px[px["Stat Sig Price Point"] == True]
     effects = (
-        price_eval_df[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
+        px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
         .mean(numeric_only=True)
     )
@@ -187,7 +193,7 @@ def apply_price_effects(
     def lookup(row: pd.Series) -> pd.Series:
         g = effect_dict.get(row["Channel Groups"])
         if g is None or g.empty:
-            return pd.Series([row["Suggested Price Adjustment %"], 0.0, 0.0, 0.0])
+            return pd.Series([0.0, 0.0, 0.0, 0.0])
         target = row["Suggested Price Adjustment %"]
         # Growth mode: snap upward to the next tested adjustment when possible.
         up = g[g["Price Adjustment Percent"] >= target]
@@ -328,22 +334,40 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
             df[col] = to_numeric(df[col])
 
     df["Win Rate"] = np.where(df["Bids"] > 0, df["Clicks"] / df["Bids"], np.nan)
+    df["Test Point Stat Sig"] = (
+        (df["Bids"].fillna(0) >= settings.min_bids_price_sig)
+        & (df["Clicks"].fillna(0) >= settings.min_clicks_price_sig)
+    )
 
     base = df[df["Price Adjustment Percent"] == 0][
-        ["Channel Groups", "Clicks", "Avg. CPC", "Win Rate", "SOV"]
+        ["Channel Groups", "Clicks", "Avg. CPC", "Win Rate", "SOV", "Test Point Stat Sig"]
     ].rename(
         columns={
             "Clicks": "Baseline Clicks",
             "Avg. CPC": "Baseline CPC",
             "Win Rate": "Baseline Win Rate",
             "SOV": "Baseline SOV",
+            "Test Point Stat Sig": "Baseline Stat Sig",
         }
     )
 
     out = df.merge(base, on="Channel Groups", how="left")
-    out["Clicks Lift %"] = np.where(out["Baseline Clicks"] > 0, out["Clicks"] / out["Baseline Clicks"] - 1, np.nan)
-    out["CPC Lift %"] = np.where(out["Baseline CPC"] > 0, out["Avg. CPC"] / out["Baseline CPC"] - 1, np.nan)
-    out["Win Rate Lift %"] = np.where(out["Baseline Win Rate"] > 0, out["Win Rate"] / out["Baseline Win Rate"] - 1, np.nan)
+    out["Stat Sig Price Point"] = out["Test Point Stat Sig"].fillna(False) & out["Baseline Stat Sig"].fillna(False)
+    out["Clicks Lift %"] = np.where(
+        (out["Baseline Clicks"] > 0) & out["Stat Sig Price Point"],
+        out["Clicks"] / out["Baseline Clicks"] - 1,
+        np.nan,
+    )
+    out["CPC Lift %"] = np.where(
+        (out["Baseline CPC"] > 0) & out["Stat Sig Price Point"],
+        out["Avg. CPC"] / out["Baseline CPC"] - 1,
+        np.nan,
+    )
+    out["Win Rate Lift %"] = np.where(
+        (out["Baseline Win Rate"] > 0) & out["Stat Sig Price Point"],
+        out["Win Rate"] / out["Baseline Win Rate"] - 1,
+        np.nan,
+    )
 
     out["Growth Opportunity Score"] = (
         0.50 * out["Clicks Lift %"].fillna(0)
@@ -353,7 +377,8 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
     )
 
     feasible = out[
-        (out["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0)
+        (out["Stat Sig Price Point"] == True)
+        & (out["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0)
         & (out["Price Adjustment Percent"].fillna(0) >= 0)
         & (out["Clicks Lift %"].fillna(0) >= 0)
     ].copy()
@@ -369,9 +394,18 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
         if not missing.empty:
             best = pd.concat([best, missing], ignore_index=True)
 
+    best["Has Sig Price Evidence"] = best["Channel Groups"].isin(
+        feasible["Channel Groups"].dropna().unique().tolist()
+    )
+    best["Price Adjustment Percent"] = np.where(best["Has Sig Price Evidence"], best["Price Adjustment Percent"], 0.0)
+    best["Growth Opportunity Score"] = np.where(best["Has Sig Price Evidence"], best["Growth Opportunity Score"], 0.0)
+    best["Clicks Lift %"] = np.where(best["Has Sig Price Evidence"], best["Clicks Lift %"], 0.0)
+    best["CPC Lift %"] = np.where(best["Has Sig Price Evidence"], best["CPC Lift %"], 0.0)
+    best["Win Rate Lift %"] = np.where(best["Has Sig Price Evidence"], best["Win Rate Lift %"], 0.0)
+
     keep_cols = [
         "Channel Groups", "Price Adjustment Percent", "Growth Opportunity Score",
-        "Clicks Lift %", "CPC Lift %", "Win Rate Lift %"
+        "Clicks Lift %", "CPC Lift %", "Win Rate Lift %", "Has Sig Price Evidence"
     ]
     return out, best[keep_cols]
 
@@ -411,6 +445,9 @@ def build_model_tables(
 
     rec = channel_state_df.merge(st_ref, on="State", how="left").merge(seg_ref, on=["State", "Segment"], how="left")
     rec = rec.merge(best_adj_df, on="Channel Groups", how="left")
+    if "Has Sig Price Evidence" not in rec.columns:
+        rec["Has Sig Price Evidence"] = False
+    rec["Has Sig Price Evidence"] = rec["Has Sig Price Evidence"].fillna(False)
 
     rec["Use Seg Perf"] = rec["Bids"] >= settings.min_bids_channel_state
     rec["Perf Proxy"] = np.where(rec["Use Seg Perf"], rec["Seg Performance"], rec["State Performance"])
@@ -427,11 +464,17 @@ def build_model_tables(
     )
 
     rec["Suggested Price Adjustment %"] = rec["Price Adjustment Percent"].fillna(0)
-    rec["Growth Score"] = rec["Growth Opportunity Score"].fillna(0)
-    rec["Intent Score"] = (
+    rec["Growth Score"] = np.where(rec["Has Sig Price Evidence"], rec["Growth Opportunity Score"].fillna(0), 0.0)
+    rec["Intent Score Raw"] = (
         0.60 * rec["Quote Start Rate"].fillna(0)
         + 0.40 * rec["Clicks to Quotes"].fillna(0)
     )
+    rec["Intent Stat Sig"] = (
+        (rec["Clicks"].fillna(0) >= settings.min_clicks_intent_sig)
+        & rec["Quote Start Rate"].notna()
+        & rec["Clicks to Quotes"].notna()
+    )
+    rec["Intent Score"] = np.where(rec["Intent Stat Sig"], rec["Intent Score Raw"], 0.0)
 
     # Binds-growth oriented score: emphasize growth + intent + strategy, while still using profitability.
     rec["Composite Score"] = (
@@ -479,6 +522,7 @@ def build_model_tables(
     rec["Clicks Lift %"] = rec["Clicks Lift %"].fillna(0)
     rec["Win Rate Lift %"] = rec["Win Rate Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
+    rec.loc[~rec["Has Sig Price Evidence"], ["Suggested Price Adjustment %", "Applied Price Adjustment %", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]] = 0.0
     # Use the stronger of measured click lift and win-rate lift as growth proxy for state-level upside.
     rec["Lift Proxy %"] = np.maximum(rec["Clicks Lift %"], rec["Win Rate Lift %"])
     # Growth objective: do not apply positive/neutral adjustments that predict lower clicks.
@@ -490,7 +534,11 @@ def build_model_tables(
     rec.loc[no_growth, "Lift Proxy %"] = 0
     rec.loc[no_growth, "CPC Lift %"] = 0
 
-    rec["Test-based Additional Clicks"] = rec["Clicks"] * rec["Lift Proxy %"]
+    rec["Test-based Additional Clicks"] = np.where(
+        rec["Has Sig Price Evidence"],
+        rec["Clicks"] * rec["Lift Proxy %"],
+        0.0,
+    )
     target_win_rate = rec["Strategy Bucket"].map(
         {
             "Strongest Momentum": 0.35,
@@ -532,6 +580,7 @@ def build_model_tables(
         ["Aggressive Scale", "Controlled Scale", "Maintain"],
         default="Pull Back",
     )
+    rec.loc[~rec["Has Sig Price Evidence"], "Recommendation"] = "No Sig Test - Hold"
 
     state_extra = rec.groupby("State", as_index=False).agg(
         Expected_Additional_Clicks=("Expected Additional Clicks", "sum"),
@@ -584,6 +633,7 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
         "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %", "Total Cost Impact %", "Quotes to Binds", "Q2B",
         "Scenario Clicks Lift %", "Scenario Win Rate Lift %", "Scenario CPC Lift %", "Scenario Lift Proxy %",
         "Expected Performance", "Actual Performance (CPB)", "Performance Delta",
+        "Intent Sig Coverage", "Price Sig Coverage",
     }
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
@@ -612,6 +662,7 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
         "Win Rate", "CPC Lift %", "Total Cost Impact %", "Quotes to Binds", "Q2B",
         "Scenario Clicks Lift %", "Scenario Win Rate Lift %", "Scenario CPC Lift %", "Scenario Lift Proxy %",
         "Expected Performance", "Actual Performance (CPB)", "Performance Delta",
+        "Intent Sig Coverage", "Price Sig Coverage",
     }
     point_pct_cols = {
         "Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct",
@@ -682,8 +733,11 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
 
 
 def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str) -> pd.DataFrame:
+    px = price_eval_df.copy()
+    if "Stat Sig Price Point" in px.columns:
+        px = px[px["Stat Sig Price Point"] == True]
     effects = (
-        price_eval_df[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
+        px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
         .mean(numeric_only=True)
     )
@@ -692,7 +746,7 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
     def lookup(row: pd.Series) -> pd.Series:
         g = effect_dict.get(row["Channel Groups"])
         if g is None or g.empty:
-            return pd.Series([row[adjustment_col], 0.0, 0.0, 0.0])
+            return pd.Series([0.0, 0.0, 0.0, 0.0])
         target = row[adjustment_col]
         up = g[g["Price Adjustment Percent"] >= target]
         near = up.sort_values("Price Adjustment Percent").iloc[0] if not up.empty else g.iloc[-1]
@@ -896,6 +950,11 @@ def main() -> None:
         roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
 
+        st.markdown("**Stat Sig Rules**")
+        min_clicks_intent_sig = st.slider("Min clicks for intent significance", 10, 300, 80, 5)
+        min_bids_price_sig = st.slider("Min bids for price-test significance", 10, 500, 100, 10)
+        min_clicks_price_sig = st.slider("Min clicks for price-test significance", 5, 200, 30, 5)
+
         st.markdown("**Score Cutoffs**")
         aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.40, 0.01)
         controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.25, aggressive_cutoff), 0.01)
@@ -923,6 +982,9 @@ def main() -> None:
             max_adj_moderate=max_adj_moderate,
             max_adj_minimal=max_adj_minimal,
             max_adj_constrained=max_adj_constrained,
+            min_clicks_intent_sig=min_clicks_intent_sig,
+            min_bids_price_sig=min_bids_price_sig,
+            min_clicks_price_sig=min_clicks_price_sig,
         )
         run = st.button("Refresh", type="primary")
 
@@ -1212,6 +1274,8 @@ def main() -> None:
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
                             **{"CPC Lift %": ("Scenario CPC Lift %", "mean")},
+                            **{"Intent Sig Coverage": ("Intent Stat Sig", "mean")},
+                            **{"Price Sig Coverage": ("Has Sig Price Evidence", "mean")},
                         ).sort_values("Expected Additional Clicks", ascending=False)
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
@@ -1265,6 +1329,11 @@ def main() -> None:
             & rec_df["Strategy Bucket"].isin(sel_strategies)
             & rec_df["Segment"].isin(sel_segments)
         ]
+        intent_sig_share = filt["Intent Stat Sig"].mean() if not filt.empty and "Intent Stat Sig" in filt.columns else 0.0
+        price_sig_share = filt["Has Sig Price Evidence"].mean() if not filt.empty and "Has Sig Price Evidence" in filt.columns else 0.0
+        st.caption(
+            f"Stat-sig coverage in filter: Intent {intent_sig_share:.0%} | Price tests {price_sig_share:.0%}"
+        )
         aggr_factor = st.slider(
             "Bid aggressiveness (scenario multiplier)",
             min_value=0.5,
@@ -1304,6 +1373,8 @@ def main() -> None:
             Additional_Budget_Needed=("Additional Budget Needed", "sum"),
             Expected_Total_Cost=("Expected Total Cost", "sum"),
             Target_CPB=("Target CPB", "mean"),
+            Intent_Sig_Coverage=("Intent Stat Sig", "mean"),
+            Price_Sig_Coverage=("Has Sig Price Evidence", "mean"),
         )
         grp["Avg. CPC"] = np.where(grp["Clicks"] > 0, grp["Current_Cost"] / grp["Clicks"], np.nan)
         grp["Win Rate"] = np.where(grp["Bids"] > 0, grp["Clicks"] / grp["Bids"], np.nan)
@@ -1326,10 +1397,13 @@ def main() -> None:
                 "Current_Binds": "Current Binds",
                 "Additional_Clicks": "Additional Clicks",
                 "Additional_Binds": "Additional Binds",
+                "Intent_Sig_Coverage": "Intent Sig Coverage",
+                "Price_Sig_Coverage": "Price Sig Coverage",
             }
         )
         show_cols = [
             "Channel Groups", "Bids", "Clicks", "Avg. CPC", "Current Cost", "Win Rate",
+            "Intent Sig Coverage", "Price Sig Coverage",
             "Scenario Bid Adjustment %", "Scenario CPC Lift %",
             "Additional Clicks", "Additional Binds", "Additional Budget Needed",
             "Expected CPB", "Target CPB (avg)", "Actual CPB",
@@ -1365,6 +1439,7 @@ def main() -> None:
         show_cols = [
             "Channel Groups", "Segment", "State", "Strategy Bucket", "Bids", "Clicks", "Suggested Price Adjustment %",
             "Applied Price Adjustment %",
+            "Intent Stat Sig", "Has Sig Price Evidence",
             "Expected Additional Clicks", "Expected Additional Binds", "Expected Additional Cost", "Growth Score",
             "Performance Score", "Composite Score", "ROE Proxy", "CR Proxy", "MRLTV Proxy", "Recommendation"
         ]
