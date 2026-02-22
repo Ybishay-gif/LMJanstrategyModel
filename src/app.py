@@ -666,22 +666,29 @@ def main() -> None:
 
         state_list = sorted(map_df["State"].dropna().unique().tolist())
         default_state = state_list[0] if state_list else None
+        if "selected_state_map" not in st.session_state:
+            st.session_state["selected_state_map"] = default_state
+
+        if isinstance(event, dict):
+            pts = event.get("selection", {}).get("points", [])
+            if pts and isinstance(pts[0], dict):
+                clicked_state = pts[0].get("location")
+                if clicked_state in state_list:
+                    st.session_state["selected_state_map"] = clicked_state
+
         selected_state = st.selectbox(
             "Select state for detailed popup",
             options=state_list,
-            index=0 if default_state else None,
+            index=state_list.index(st.session_state["selected_state_map"]) if state_list and st.session_state["selected_state_map"] in state_list else 0,
             key="tab1_state_popup",
         )
-
-        if event and isinstance(event, dict):
-            pts = event.get("selection", {}).get("points", [])
-            if pts:
-                point_idx = pts[0].get("point_index")
-                if point_idx is not None and 0 <= point_idx < len(map_df):
-                    selected_state = map_df.iloc[point_idx]["State"]
+        st.session_state["selected_state_map"] = selected_state
 
         if selected_state:
             row = map_df[map_df["State"] == selected_state].head(1)
+            if row.empty:
+                st.warning("No state-level data found for the selected state.")
+                return
             seg_view = state_seg_df[state_seg_df["State"] == selected_state].merge(
                 state_seg_extra_df[state_seg_extra_df["State"] == selected_state],
                 on=["State", "Segment"],
