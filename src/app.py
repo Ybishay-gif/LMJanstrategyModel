@@ -1237,6 +1237,8 @@ def main() -> None:
                 "Expected_Total_Cost": "Expected Total Cost",
                 "Target_CPB": "Target CPB (avg)",
                 "Current_Binds": "Current Binds",
+                "Additional_Clicks": "Additional Clicks",
+                "Additional_Binds": "Additional Binds",
             }
         )
         show_cols = [
@@ -1246,6 +1248,7 @@ def main() -> None:
             "Expected CPB", "Target CPB (avg)", "Actual CPB",
             "Expected Performance", "Actual Performance (CPB)", "Performance Delta", "Total Cost Impact %",
         ]
+        show_cols = [c for c in show_cols if c in grp.columns]
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
         st.dataframe(format_display_df(grp), use_container_width=True)
 
