@@ -659,9 +659,20 @@ def main() -> None:
             },
             title="US Map: Strategy Bucket + State KPIs",
         )
-        fig.update_layout(margin=dict(l=0, r=0, t=40, b=0), legend_title_text="Strategy", template=plotly_template)
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=40, b=0),
+            legend_title_text="Strategy",
+            template=plotly_template,
+            clickmode="event+select",
+        )
 
-        event = st.plotly_chart(fig, use_container_width=True, key="state_map", on_select="rerun")
+        event = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key="state_map",
+            on_select="rerun",
+            selection_mode="points",
+        )
 
         state_list = sorted(map_df["State"].dropna().unique().tolist())
         default_state = state_list[0] if state_list else None
@@ -671,7 +682,24 @@ def main() -> None:
         if isinstance(event, dict):
             pts = event.get("selection", {}).get("points", [])
             if pts and isinstance(pts[0], dict):
-                clicked_state = pts[0].get("location")
+                p0 = pts[0]
+                clicked_state = p0.get("location")
+                if not clicked_state:
+                    idx = p0.get("point_index")
+                    if idx is None:
+                        idx = p0.get("pointNumber")
+                    if isinstance(idx, int) and 0 <= idx < len(map_df):
+                        clicked_state = map_df.iloc[idx]["State"]
+                if not clicked_state and isinstance(p0.get("customdata"), (list, tuple)) and p0["customdata"]:
+                    maybe = str(p0["customdata"][0]).strip().upper()
+                    if maybe in state_list:
+                        clicked_state = maybe
+                if not clicked_state:
+                    for k in ("hovertext", "text"):
+                        maybe = p0.get(k)
+                        if isinstance(maybe, str) and maybe.strip().upper() in state_list:
+                            clicked_state = maybe.strip().upper()
+                            break
                 if clicked_state in state_list:
                     st.session_state["selected_state_map"] = clicked_state
 
