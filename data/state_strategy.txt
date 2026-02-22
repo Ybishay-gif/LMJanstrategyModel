@@ -1,0 +1,175 @@
+State
+
+Digital Acq Growth Bucket
+
+AL
+
+Minimal Growth
+
+AR
+
+LTV Constrained
+
+AZ
+
+Moderate Momentum
+
+CO
+
+Closure Constrained
+
+CT
+
+Closure Constrained
+
+DC
+
+Minimal Growth
+
+DE
+
+LTV Constrained
+
+FL
+
+Closure Constrained
+
+GA
+
+Closure Constrained
+
+IA
+
+LTV Constrained
+
+ID
+
+LTV Constrained
+
+IL
+
+Moderate Momentum
+
+IN
+
+LTV Constrained
+
+KS
+
+Minimal Growth
+
+KY
+
+LTV Constrained
+
+MA
+
+Strongest Momentum
+
+MD
+
+Moderate Momentum
+
+ME
+
+LTV Constrained
+
+MI
+
+Strongest Momentum
+
+MN
+
+LTV Constrained
+
+MO
+
+Minimal Growth
+
+MS
+
+LTV Constrained
+
+NC
+
+LTV Constrained
+
+NE
+
+LTV Constrained
+
+NH
+
+Moderate Momentum
+
+NJ
+
+Moderate Momentum
+
+NM
+
+Moderate Momentum
+
+NV
+
+Inactive/Low Spend
+
+NY
+
+Closure Constrained
+
+OH
+
+Closure Constrained
+
+OK
+
+LTV Constrained
+
+OR
+
+Closure Constrained
+
+PA
+
+Strongest Momentum
+
+RI
+
+Inactive/Low Spend
+
+SC
+
+Closure Constrained
+
+TN
+
+LTV Constrained
+
+TX
+
+Closure Constrained
+
+UT
+
+LTV Constrained
+
+VA
+
+Strongest Momentum
+
+VT
+
+Moderate Momentum
+
+WA
+
+Closure Constrained
+
+WI
+
+Minimal Growth
+
+WV
+
+LTV Constrained

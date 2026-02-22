@@ -10,12 +10,12 @@ import streamlit as st
 st.set_page_config(page_title="Insurance Growth Navigator", layout="wide")
 
 DEFAULT_PATHS = {
-    "state_strategy": "/Users/YossiBen_Y/Desktop/State strategy",
-    "state_data": "/Users/YossiBen_Y/Downloads/State Data Jan 2026.csv",
-    "state_seg": "/Users/YossiBen_Y/Downloads/State-Seg data 2026.csv",
-    "channel_group": "/Users/YossiBen_Y/Downloads/Channel group data jan 2026.csv",
-    "channel_price_exp": "/Users/YossiBen_Y/Downloads/Channel group price exploration data.csv",
-    "channel_state": "/Users/YossiBen_Y/Downloads/Channel group and state Jan 2026.csv",
+    "state_strategy": "data/state_strategy.txt",
+    "state_data": "data/state_data.csv",
+    "state_seg": "data/state_seg_data.csv",
+    "channel_group": "data/channel_group_data.csv",
+    "channel_price_exp": "data/channel_price_exploration.csv",
+    "channel_state": "data/channel_group_state.csv",
 }
 
 STRATEGY_SCALE = {
@@ -511,7 +511,7 @@ def main() -> None:
         st.header("Data Paths")
         data_mode = st.radio(
             "Data source mode",
-            options=["Upload files (Cloud)", "Local paths (Desktop)"],
+            options=["Repo data (GitHub)", "Upload files (Cloud)", "Local paths (Desktop)"],
             index=0,
         )
 
@@ -520,7 +520,9 @@ def main() -> None:
         strategy_path = state_path = state_seg_path = ""
         channel_group_path = price_path = channel_state_path = ""
 
-        if data_mode == "Upload files (Cloud)":
+        if data_mode == "Repo data (GitHub)":
+            st.caption("Using data files from repository `data/` folder.")
+        elif data_mode == "Upload files (Cloud)":
             strategy_upload = st.file_uploader("State strategy file", type=None)
             state_upload = st.file_uploader("State data CSV", type=["csv"])
             state_seg_upload = st.file_uploader("State-segment CSV", type=["csv"])
@@ -583,7 +585,14 @@ def main() -> None:
         return
 
     try:
-        if data_mode == "Upload files (Cloud)":
+        if data_mode == "Repo data (GitHub)":
+            strategy_df = read_state_strategy(DEFAULT_PATHS["state_strategy"])
+            state_raw = read_csv(DEFAULT_PATHS["state_data"])
+            state_seg_raw = read_csv(DEFAULT_PATHS["state_seg"])
+            _ = read_csv(DEFAULT_PATHS["channel_group"])
+            price_raw = read_csv(DEFAULT_PATHS["channel_price_exp"])
+            channel_state_raw = read_csv(DEFAULT_PATHS["channel_state"])
+        elif data_mode == "Upload files (Cloud)":
             required_uploads = [
                 strategy_upload, state_upload, state_seg_upload,
                 channel_group_upload, price_upload, channel_state_upload,
