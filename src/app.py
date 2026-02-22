@@ -606,9 +606,45 @@ TIER_NAME_MAP = {
     10: "T10 Full-Throttle",
 }
 
+TIER_DEFINITION_MAP = {
+    1: "Low Growth + Low Intent + Weak Third Factor",
+    2: "Low Growth + Mixed Intent + Weak/Medium Third Factor",
+    3: "Mixed Growth/Intent with Weak Third Factor",
+    4: "Balanced Mid-Lane",
+    5: "Intent/Growth Opportunity with one weak dimension",
+    6: "High Third Factor with Mixed Growth/Intent",
+    7: "Strong Upside with one limiting dimension",
+    8: "Scale Candidate (2 strong dimensions)",
+    9: "High-Confidence Scale (very strong profile)",
+    10: "Top Priority Scale (High Growth + High Intent + High Third Factor)",
+}
+
 
 def _tier_num_to_name(tier_num: int) -> str:
     return TIER_NAME_MAP.get(int(tier_num), f"T{int(tier_num)}")
+
+
+def _assign_tier_number(g: int, i: int, t: int) -> int:
+    # Rule-based bins to keep tiers meaningfully differentiated.
+    if g == 2 and i == 2 and t == 2:
+        return 10
+    if (g == 2 and i == 2 and t == 1) or (g == 2 and i == 1 and t == 2):
+        return 9
+    if (g == 1 and i == 2 and t == 2) or (g == 2 and i == 1 and t == 1):
+        return 8
+    if (g == 2 and i == 2 and t == 0) or (g == 1 and i == 2 and t == 1) or (g == 2 and i == 1 and t == 0):
+        return 7
+    if (g == 1 and i == 1 and t == 2) or (g == 2 and i == 0 and t == 2):
+        return 6
+    if (g == 1 and i == 2 and t == 0) or (g == 2 and i == 0 and t == 1) or (g == 0 and i == 2 and t == 2):
+        return 5
+    if (g == 1 and i == 1 and t == 1) or (g == 0 and i == 2 and t == 1) or (g == 1 and i == 0 and t == 2):
+        return 4
+    if (g == 1 and i == 1 and t == 0) or (g == 0 and i == 1 and t == 2) or (g == 2 and i == 0 and t == 0):
+        return 3
+    if (g == 0 and i == 1 and t == 1) or (g == 1 and i == 0 and t == 1) or (g == 0 and i == 2 and t == 0):
+        return 2
+    return 1
 
 
 def _build_tier_assignments(rec: pd.DataFrame, mode: str) -> pd.DataFrame:
@@ -632,28 +668,25 @@ def _build_tier_assignments(rec: pd.DataFrame, mode: str) -> pd.DataFrame:
     else:
         t["Third Bucket"] = quantile_bucket(t["Performance Score"].fillna(0), ["Low", "Mid", "High"])
 
-    th_num = t["Third Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0)
-    t["Action Index"] = 0.45 * g_num + 0.35 * i_num + 0.20 * th_num
-
-    q = min(10, int(t["Action Index"].rank(method="first").nunique()))
-    t["Tier Number"] = pd.qcut(
-        t["Action Index"].rank(method="first"),
-        q=q,
-        labels=list(range(1, q + 1)),
-        duplicates="drop",
-    ).astype(int)
-    if q < 10:
-        t["Tier Number"] = np.ceil(t["Tier Number"] * (10 / q)).astype(int)
-    t["Tier Number"] = t["Tier Number"].clip(1, 10)
+    th_num = t["Third Bucket"].map({"Low": 0, "Mid": 1, "High": 2}).fillna(0).astype(int)
+    t["Tier Number"] = [
+        _assign_tier_number(int(g), int(i), int(th))
+        for g, i, th in zip(g_num.astype(int), i_num.astype(int), th_num)
+    ]
     t["Tier Name"] = t["Tier Number"].map(_tier_num_to_name)
     return t
 
 
 def _build_tier_summary(t: pd.DataFrame, basis_label: str) -> pd.DataFrame:
+    def _mode_str(series: pd.Series) -> str:
+        if series.empty:
+            return "n/a"
+        return str(series.mode(dropna=True).iloc[0]) if not series.mode(dropna=True).empty else "n/a"
+
     out = t.groupby(["Tier Number", "Tier Name"], as_index=False).agg(
-        Basis=("Third Bucket", lambda x: ", ".join(sorted(set(x)))),
-        Growth=("Growth Bucket", lambda x: ", ".join(sorted(set(x)))),
-        Intent=("Intent Bucket", lambda x: ", ".join(sorted(set(x)))),
+        Basis=("Third Bucket", _mode_str),
+        Growth=("Growth Bucket", _mode_str),
+        Intent=("Intent Bucket", _mode_str),
         States=("State", lambda x: ", ".join(sorted(set(x)))),
         Channel_Groups=("Channel Groups", lambda x: ", ".join(sorted(set(x)))),
         Rows=("Channel Groups", "count"),
@@ -661,8 +694,24 @@ def _build_tier_summary(t: pd.DataFrame, basis_label: str) -> pd.DataFrame:
         Additional_Binds=("Expected Additional Binds", "sum"),
         Current_Binds=("Binds", "sum"),
     ).sort_values("Tier Number")
+    out["Definition"] = out["Tier Number"].map(TIER_DEFINITION_MAP)
     out = out.rename(columns={"Basis": basis_label})
-    return out
+    return out[
+        [
+            "Tier Number",
+            "Tier Name",
+            "Definition",
+            "Growth",
+            "Intent",
+            basis_label,
+            "Rows",
+            "Additional_Clicks",
+            "Additional_Binds",
+            "Current_Binds",
+            "States",
+            "Channel_Groups",
+        ]
+    ]
 
 
 def build_tier_tables(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
