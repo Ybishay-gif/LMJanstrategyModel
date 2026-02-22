@@ -28,12 +28,12 @@ STRATEGY_SCALE = {
 }
 
 STRATEGY_COLOR = {
-    "Strongest Momentum": "#005A9C",
-    "Moderate Momentum": "#1B9E77",
-    "Minimal Growth": "#66A61E",
-    "LTV Constrained": "#E6AB02",
-    "Closure Constrained": "#E7298A",
-    "Inactive/Low Spend": "#7570B3",
+    "Strongest Momentum": "#FFD400",
+    "Moderate Momentum": "#74D2D4",
+    "LTV Constrained": "#B2ACE6",
+    "Closure Constrained": "#1B185A",
+    "Minimal Growth": "#B5B5B5",
+    "Inactive/Low Spend": "#F3F4F6",
 }
 
 DARK_CSS = """
@@ -745,16 +745,16 @@ def main() -> None:
                 axis=-1,
             ),
             hovertemplate=(
-                "<b style='font-size:14px;'>%{location}</b><br>"
-                "<span style='color:#9ca3af'>Strategy:</span> %{customdata[0]}<br>"
-                "<span style='color:#9ca3af'>Fit:</span> %{customdata[1]} %{customdata[2]}<br>"
-                "<span style='color:#9ca3af'>ROE:</span> %{customdata[3]}<br>"
-                "<span style='color:#9ca3af'>Combined Ratio:</span> %{customdata[4]}<br>"
-                "<span style='color:#9ca3af'>Performance:</span> %{customdata[5]}<br>"
-                "<span style='color:#9ca3af'>Binds:</span> %{customdata[6]}<br>"
-                "<span style='color:#9ca3af'>Avg LTV:</span> %{customdata[7]}<br>"
-                "<span style='color:#9ca3af'>Add. Clicks:</span> %{customdata[8]}<br>"
-                "<span style='color:#9ca3af'>Add. Binds:</span> %{customdata[9]}<extra></extra>"
+                "<b style='font-size:15px;'>%{location}</b><br>"
+                "<span style='opacity:0.88;'>%{customdata[0]}</span><br>"
+                "<span style='opacity:0.78;'>%{customdata[1]} %{customdata[2]}</span>"
+                "<br>━━━━━━━━━━━━<br>"
+                "<b>ROE</b> %{customdata[3]}  ·  <b>CR</b> %{customdata[4]}<br>"
+                "<b>Perf</b> %{customdata[5]}  ·  <b>Binds</b> %{customdata[6]}<br>"
+                "<b>Avg LTV</b> %{customdata[7]}<br>"
+                "<br><b>Growth Upside</b><br>"
+                "Additional Clicks: <b>%{customdata[8]}</b><br>"
+                "Additional Binds: <b>%{customdata[9]}</b><extra></extra>"
             ),
         )
         fig.update_layout(
@@ -762,6 +762,12 @@ def main() -> None:
             legend_title_text="Strategy",
             template=plotly_template,
             clickmode="event+select",
+            hoverlabel=dict(
+                bgcolor="#0F172A" if dark_mode else "#F8FAFC",
+                bordercolor="#334155" if dark_mode else "#CBD5E1",
+                font=dict(color="#E2E8F0" if dark_mode else "#0F172A", size=13),
+                align="left",
+            ),
         )
 
         event = st.plotly_chart(
