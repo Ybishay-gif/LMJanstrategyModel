@@ -585,11 +585,10 @@ def main() -> None:
             max_adj_minimal=max_adj_minimal,
             max_adj_constrained=max_adj_constrained,
         )
-        run = st.button("Run", type="primary")
+        run = st.button("Refresh", type="primary")
 
-    if not run:
-        st.info("Adjust paths/settings and click Run.")
-        return
+    # Auto-run on first load; Refresh is optional for manual reruns.
+    _ = run
 
     try:
         if data_mode == "Repo data (GitHub)":
