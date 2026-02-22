@@ -36,6 +36,16 @@ STRATEGY_COLOR = {
     "Inactive/Low Spend": "#F3F4F6",
 }
 
+PERFORMANCE_GROUP_COLOR = {
+    "Top Performance": "#16A34A",
+    "Strong Performance": "#4ADE80",
+    "Balanced": "#A3E635",
+    "Mixed Risk": "#FACC15",
+    "Weak Performance": "#F97316",
+    "Poor Performance": "#DC2626",
+    "Low Sig - Review": "#94A3B8",
+}
+
 DARK_CSS = """
 <style>
 :root {
@@ -1245,16 +1255,32 @@ def main() -> None:
         map_df["Binds Display"] = map_df["Binds"].map(lambda x: "n/a" if pd.isna(x) else f"{x:,.0f}")
         map_df["Add Clicks Display"] = map_df["Expected_Additional_Clicks"].map(lambda x: f"{x:,.0f}")
         map_df["Add Binds Display"] = map_df["Expected_Additional_Binds"].map(lambda x: f"{x:,.1f}")
+        map_df["Perf Group Display"] = map_df["ROE Performance Group"].fillna("Low Sig - Review")
+
+        map_mode = st.radio(
+            "Map color mode",
+            options=["Product Strategy", "Performance Group"],
+            horizontal=True,
+            key="tab1_map_color_mode",
+        )
+        map_color_col = "Strategy Bucket" if map_mode == "Product Strategy" else "ROE Performance Group"
+        map_color_map = STRATEGY_COLOR if map_mode == "Product Strategy" else PERFORMANCE_GROUP_COLOR
+        map_title = (
+            "US Map: Product Strategy + State KPIs"
+            if map_mode == "Product Strategy"
+            else "US Map: Performance Group + State KPIs"
+        )
 
         fig = px.choropleth(
             map_df,
             locations="State",
             locationmode="USA-states",
             scope="usa",
-            color="Strategy Bucket",
-            color_discrete_map=STRATEGY_COLOR,
+            color=map_color_col,
+            color_discrete_map=map_color_map,
             custom_data=[
                 "Strategy Bucket",
+                "Perf Group Display",
                 "Indicator",
                 "Conflict Label",
                 "ROE Display",
@@ -1265,20 +1291,21 @@ def main() -> None:
                 "Add Clicks Display",
                 "Add Binds Display",
             ],
-            title="US Map: Strategy Bucket + State KPIs",
+            title=map_title,
         )
         fig.update_traces(
             hovertemplate=(
                 "<b style='font-size:15px;'>%{location}</b><br>"
                 "<span style='opacity:0.88;'>%{customdata[0]}</span><br>"
-                "<span style='opacity:0.78;'>%{customdata[1]} %{customdata[2]}</span>"
+                "<span style='opacity:0.78;'>Perf Group: %{customdata[1]}</span><br>"
+                "<span style='opacity:0.78;'>%{customdata[2]} %{customdata[3]}</span>"
                 "<br>━━━━━━━━━━━━<br>"
-                "<b>ROE</b> %{customdata[3]}  ·  <b>CR</b> %{customdata[4]}<br>"
-                "<b>Perf</b> %{customdata[5]}  ·  <b>Binds</b> %{customdata[6]}<br>"
-                "<b>Avg LTV</b> %{customdata[7]}<br>"
+                "<b>ROE</b> %{customdata[4]}  ·  <b>CR</b> %{customdata[5]}<br>"
+                "<b>Perf</b> %{customdata[6]}  ·  <b>Binds</b> %{customdata[7]}<br>"
+                "<b>Avg LTV</b> %{customdata[8]}<br>"
                 "<br><b>Growth Upside</b><br>"
-                "Additional Clicks: <b>%{customdata[8]}</b><br>"
-                "Additional Binds: <b>%{customdata[9]}</b><extra></extra>"
+                "Additional Clicks: <b>%{customdata[9]}</b><br>"
+                "Additional Binds: <b>%{customdata[10]}</b><extra></extra>"
             ),
         )
         fig.update_layout(
