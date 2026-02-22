@@ -282,7 +282,7 @@ def prepare_state_seg(state_seg_df: pd.DataFrame, state_df: pd.DataFrame) -> pd.
     seg = normalize_columns(state_seg_df).copy()
     st = normalize_columns(state_df).copy()
 
-    for col in ["ROE", "Combined Ratio", "Performance", "CPB", "Target CPB", "Clicks", "Binds", "Avg. MRLTV"]:
+    for col in ["ROE", "Combined Ratio", "Performance", "CPB", "Target CPB", "Clicks", "Binds", "Avg. MRLTV", "Quotes to Binds"]:
         if col in seg.columns:
             seg[col] = to_numeric(seg[col])
         if col in st.columns:
@@ -448,7 +448,7 @@ def build_model_tables(
         (rec["Composite Score"] >= settings.controlled_cutoff)
         & (rec["Composite Score"] < settings.aggressive_cutoff),
         "Suggested Price Adjustment %",
-    ] = np.maximum(np.minimum(rec["Suggested Price Adjustment %"], 15), 10)
+    ] = np.maximum(np.minimum(rec["Suggested Price Adjustment %"], 30), 15)
     rec.loc[
         (rec["Composite Score"] >= settings.maintain_cutoff)
         & (rec["Composite Score"] < settings.controlled_cutoff),
@@ -460,7 +460,7 @@ def build_model_tables(
     rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
 
     rec.loc[rec["Intent Score"] < settings.min_intent_for_scale, "Suggested Price Adjustment %"] = np.minimum(
-        rec["Suggested Price Adjustment %"], 5
+        rec["Suggested Price Adjustment %"], 10
     )
     # Pull back only when both unit economics are materially weak.
     hard_pullback = (rec["ROE Proxy"] < settings.roe_pullback_floor) & (rec["CR Proxy"] > settings.cr_pullback_ceiling)
@@ -581,12 +581,12 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
         "ROE", "Combined Ratio", "Performance",
         "ROE Proxy", "CR Proxy", "Performance Score",
         "Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy",
-        "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %", "Total Cost Impact %",
+        "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %", "Total Cost Impact %", "Quotes to Binds", "Q2B",
     }
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
         "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
-        "Total Cost", "Expected Total Cost", "Additional Budget Required", "CPC Impact Cost",
+        "Total Cost", "Expected Total Cost", "Additional Budget Required", "Additional Budget Needed",
     }
 
     for c in out.columns:
@@ -797,10 +797,10 @@ def main() -> None:
         maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.10, controlled_cutoff), 0.01)
 
         st.markdown("**Strategy Max Adjustment (%)**")
-        max_adj_strongest = st.slider("Strongest Momentum cap", -10, 40, 30, 1)
-        max_adj_moderate = st.slider("Moderate Momentum cap", -10, 30, 20, 1)
-        max_adj_minimal = st.slider("Minimal Growth cap", -10, 20, 10, 1)
-        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 15, 8, 1)
+        max_adj_strongest = st.slider("Strongest Momentum cap", -10, 60, 45, 1)
+        max_adj_moderate = st.slider("Moderate Momentum cap", -10, 50, 35, 1)
+        max_adj_minimal = st.slider("Minimal Growth cap", -10, 40, 25, 1)
+        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 30, 15, 1)
 
         settings = Settings(
             max_cpc_increase_pct=max_cpc_increase_pct,
@@ -1004,13 +1004,20 @@ def main() -> None:
             )
             seg_costs = rec_df[rec_df["State"] == selected_state].groupby("Segment", as_index=False).agg(
                 Bids=("Bids", "sum"),
+                Clicks=("Clicks", "sum"),
                 **{"Avg. CPC": ("Avg. CPC", "mean")},
                 **{"Additional Budget Required": ("Expected Additional Cost", "sum")},
             )
+            seg_costs["Win Rate"] = np.where(seg_costs["Bids"] > 0, seg_costs["Clicks"] / seg_costs["Bids"], np.nan)
+            seg_costs = seg_costs.drop(columns=["Clicks"])
             seg_view = seg_view.merge(seg_costs, on="Segment", how="left")
             seg_view["Expected_Additional_Clicks"] = seg_view["Expected_Additional_Clicks"].fillna(0)
             seg_view["Expected_Additional_Binds"] = seg_view["Expected_Additional_Binds"].fillna(0)
             seg_view["Additional Budget Required"] = seg_view["Additional Budget Required"].fillna(0)
+            if "Quotes to Binds" in seg_view.columns:
+                seg_view["Q2B"] = seg_view["Quotes to Binds"]
+            else:
+                seg_view["Q2B"] = np.nan
 
             with st.container(border=True):
                 st.subheader(f"🔎 State Deep Dive: {selected_state}  |  Strategy: {row['Strategy Bucket'].iloc[0]}")
@@ -1037,7 +1044,7 @@ def main() -> None:
 
                 st.markdown("**🧩 Per-Segment KPI + Opportunity**")
                 seg_show = seg_view[[
-                    "Segment", "Bids", "Avg. CPC", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
+                    "Segment", "Bids", "Avg. CPC", "Win Rate", "Q2B", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
                     "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 st.dataframe(
@@ -1065,9 +1072,9 @@ def main() -> None:
                             state_channels["Total Cost"] = state_channels["Total Click Cost"]
                         else:
                             state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
-                        # Show transparent CPC-only cost impact for the recommended adjustment.
-                        state_channels["CPC Impact Cost"] = state_channels["Total Cost"] * state_channels["CPC Lift %"]
-                        state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["CPC Impact Cost"]
+                        # Additional budget needed includes both additional volume and CPC increase.
+                        state_channels["Additional Budget Needed"] = state_channels["Expected Additional Cost"]
+                        state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["Additional Budget Needed"]
 
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
                             Bids=("Bids", "sum"),
@@ -1075,7 +1082,7 @@ def main() -> None:
                             **{"Win Rate": ("Bids to Clicks", "mean")},
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
-                            **{"CPC Impact Cost": ("CPC Impact Cost", "sum")},
+                            **{"Additional Budget Needed": ("Additional Budget Needed", "sum")},
                             **{"Recommended Bid Adjustment": ("Applied Price Adjustment %", "median")},
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
@@ -1083,7 +1090,7 @@ def main() -> None:
                         ).sort_values("Expected Additional Clicks", ascending=False)
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
-                            cg_state["CPC Impact Cost"] / cg_state["Total Cost"],
+                            cg_state["Additional Budget Needed"] / cg_state["Total Cost"],
                             0,
                         )
 
