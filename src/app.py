@@ -582,11 +582,14 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
         "ROE Proxy", "CR Proxy", "Performance Score",
         "Clicks to Binds", "Seg Clicks to Binds", "Clicks to Binds Proxy",
         "SOV", "Bids to Clicks", "Win Rate", "CPC Lift %", "Total Cost Impact %", "Quotes to Binds", "Q2B",
+        "Scenario Clicks Lift %", "Scenario Win Rate Lift %", "Scenario CPC Lift %", "Scenario Lift Proxy %",
+        "Expected Performance", "Actual Performance (CPB)", "Performance Delta",
     }
     currency_cols = {
         "Avg. MRLTV", "State Avg. MRLTV", "Seg Avg. MRLTV", "MRLTV Proxy", "Avg_LTV", "Avg_MRLTV",
         "CPB", "State CPB", "Target CPB", "Avg. CPC", "Avg. Bid", "Baseline CPC", "Expected Additional Cost",
         "Total Cost", "Expected Total Cost", "Additional Budget Required", "Additional Budget Needed",
+        "Current Cost", "Actual CPB", "Expected CPB", "Target CPB (avg)",
     }
 
     for c in out.columns:
@@ -594,8 +597,45 @@ def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = out[c].map(_fmt_pct)
         elif c in currency_cols and pd.api.types.is_numeric_dtype(out[c]):
             out[c] = out[c].map(_fmt_cur)
-        elif c in {"Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct", "Recommended Bid Adjustment"} and pd.api.types.is_numeric_dtype(out[c]):
+        elif c in {"Suggested Price Adjustment %", "Applied Price Adjustment %", "Suggested_Price_Adjustment_pct", "Recommended Bid Adjustment", "Scenario Bid Adjustment %"} and pd.api.types.is_numeric_dtype(out[c]):
             out[c] = out[c].map(lambda v: "n/a" if pd.isna(v) else f"{v:+.0f}%")
+    return out
+
+
+def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str) -> pd.DataFrame:
+    effects = (
+        price_eval_df[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
+        .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .mean(numeric_only=True)
+    )
+    effect_dict = {ch: g.sort_values("Price Adjustment Percent") for ch, g in effects.groupby("Channel Groups")}
+
+    def lookup(row: pd.Series) -> pd.Series:
+        g = effect_dict.get(row["Channel Groups"])
+        if g is None or g.empty:
+            return pd.Series([row[adjustment_col], 0.0, 0.0, 0.0])
+        target = row[adjustment_col]
+        up = g[g["Price Adjustment Percent"] >= target]
+        near = up.sort_values("Price Adjustment Percent").iloc[0] if not up.empty else g.iloc[-1]
+        return pd.Series(
+            [near["Price Adjustment Percent"], near["Clicks Lift %"], near["Win Rate Lift %"], near["CPC Lift %"]]
+        )
+
+    out = df.copy()
+    mapped = out.apply(lookup, axis=1)
+    mapped.columns = [
+        "Scenario Bid Adjustment %",
+        "Scenario Clicks Lift %",
+        "Scenario Win Rate Lift %",
+        "Scenario CPC Lift %",
+    ]
+    out[[
+        "Scenario Bid Adjustment %",
+        "Scenario Clicks Lift %",
+        "Scenario Win Rate Lift %",
+        "Scenario CPC Lift %",
+    ]] = mapped
+    out["Scenario Lift Proxy %"] = np.maximum(out["Scenario Clicks Lift %"], out["Scenario Win Rate Lift %"])
     return out
 
 
@@ -1138,18 +1178,75 @@ def main() -> None:
             & rec_df["Strategy Bucket"].isin(sel_strategies)
             & rec_df["Segment"].isin(sel_segments)
         ]
+        aggr_factor = st.slider(
+            "Bid aggressiveness (scenario multiplier)",
+            min_value=0.5,
+            max_value=3.0,
+            value=1.0,
+            step=0.1,
+            key="tab2_aggr_factor",
+            help="Scales recommended bid adjustment before applying tested price-exploration effects.",
+        )
 
-        grp = filt.groupby(["Channel Groups", "Segment"], as_index=False).agg(
+        scen = filt.copy()
+        scen["Scenario Target Adj %"] = scen["Applied Price Adjustment %"] * aggr_factor
+        scen["Scenario Target Adj %"] = np.minimum(scen["Scenario Target Adj %"], scen["Strategy Max Adj %"])
+        scen = apply_scenario_effects(scen, price_eval, "Scenario Target Adj %")
+        scen["Scenario Lift Proxy %"] = scen["Scenario Lift Proxy %"].clip(lower=0)
+
+        scen["Additional Clicks (scenario)"] = scen["Clicks"] * scen["Scenario Lift Proxy %"]
+        scen["Additional Binds (scenario)"] = scen["Additional Clicks (scenario)"] * scen["Clicks to Binds Proxy"].fillna(0)
+        if "Total Click Cost" in scen.columns:
+            scen["Current Cost"] = scen["Total Click Cost"].fillna(scen["Clicks"] * scen["Avg. CPC"])
+        else:
+            scen["Current Cost"] = scen["Clicks"] * scen["Avg. CPC"]
+        scen["Expected Total Cost"] = (
+            (scen["Clicks"] + scen["Additional Clicks (scenario)"]) * scen["Avg. CPC"] * (1 + scen["Scenario CPC Lift %"].fillna(0))
+        )
+        scen["Additional Budget Needed"] = scen["Expected Total Cost"] - scen["Current Cost"]
+
+        grp = scen.groupby("Channel Groups", as_index=False).agg(
+            Bids=("Bids", "sum"),
             Clicks=("Clicks", "sum"),
-            Suggested_Price_Adjustment_pct=("Suggested Price Adjustment %", "median"),
-            Applied_Price_Adjustment_pct=("Applied Price Adjustment %", "median"),
-            Additional_Clicks=("Expected Additional Clicks", "sum"),
-            Additional_Binds=("Expected Additional Binds", "sum"),
-            ROE=("ROE Proxy", "mean"),
-            Combined_Ratio=("CR Proxy", "mean"),
-            Avg_LTV=("MRLTV Proxy", "mean"),
-        ).sort_values("Additional_Clicks", ascending=False)
+            Current_Binds=("Binds", "sum"),
+            Current_Cost=("Current Cost", "sum"),
+            Scenario_Bid_Adjustment=("Scenario Bid Adjustment %", "median"),
+            Scenario_CPC_Lift=("Scenario CPC Lift %", "mean"),
+            Additional_Clicks=("Additional Clicks (scenario)", "sum"),
+            Additional_Binds=("Additional Binds (scenario)", "sum"),
+            Additional_Budget_Needed=("Additional Budget Needed", "sum"),
+            Expected_Total_Cost=("Expected Total Cost", "sum"),
+            Target_CPB=("Target CPB", "mean"),
+        )
+        grp["Avg. CPC"] = np.where(grp["Clicks"] > 0, grp["Current_Cost"] / grp["Clicks"], np.nan)
+        grp["Win Rate"] = np.where(grp["Bids"] > 0, grp["Clicks"] / grp["Bids"], np.nan)
+        grp["Expected Binds"] = grp["Current_Binds"] + grp["Additional_Binds"]
+        grp["Actual CPB"] = np.where(grp["Current_Binds"] > 0, grp["Current_Cost"] / grp["Current_Binds"], np.nan)
+        grp["Expected CPB"] = np.where(grp["Expected Binds"] > 0, grp["Expected_Total_Cost"] / grp["Expected Binds"], np.nan)
+        grp["Expected Performance"] = np.where(grp["Expected CPB"] > 0, grp["Target_CPB"] / grp["Expected CPB"], np.nan)
+        grp["Actual Performance (CPB)"] = np.where(grp["Actual CPB"] > 0, grp["Target_CPB"] / grp["Actual CPB"], np.nan)
+        grp["Performance Delta"] = grp["Expected Performance"] - grp["Actual Performance (CPB)"]
+        grp["Total Cost Impact %"] = np.where(grp["Current_Cost"] > 0, grp["Additional_Budget_Needed"] / grp["Current_Cost"], np.nan)
 
+        grp = grp.rename(
+            columns={
+                "Current_Cost": "Current Cost",
+                "Scenario_Bid_Adjustment": "Scenario Bid Adjustment %",
+                "Scenario_CPC_Lift": "Scenario CPC Lift %",
+                "Additional_Budget_Needed": "Additional Budget Needed",
+                "Expected_Total_Cost": "Expected Total Cost",
+                "Target_CPB": "Target CPB (avg)",
+                "Current_Binds": "Current Binds",
+            }
+        )
+        show_cols = [
+            "Channel Groups", "Bids", "Clicks", "Avg. CPC", "Current Cost", "Win Rate",
+            "Scenario Bid Adjustment %", "Scenario CPC Lift %",
+            "Additional Clicks", "Additional Binds", "Additional Budget Needed",
+            "Expected CPB", "Target CPB (avg)", "Actual CPB",
+            "Expected Performance", "Actual Performance (CPB)", "Performance Delta", "Total Cost Impact %",
+        ]
+        grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
         st.dataframe(format_display_df(grp), use_container_width=True)
 
     with tabs[2]:
