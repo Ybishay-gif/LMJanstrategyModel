@@ -213,7 +213,7 @@ def apply_price_effects(
 
 def prepare_state(state_df: pd.DataFrame, strategy_df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_columns(state_df)
-    for col in ["ROE", "Combined Ratio", "Performance", "CPB", "Target CPB", "Clicks", "Binds", "Avg. MRLTV"]:
+    for col in ["ROE", "Combined Ratio", "Performance", "CPB", "Target CPB", "Clicks", "Binds", "Avg. MRLTV", "Quotes to Binds"]:
         if col in df.columns:
             df[col] = to_numeric(df[col])
 
@@ -1203,7 +1203,8 @@ def main() -> None:
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
-            "State", "Strategy Bucket", "Conflict Arrow", "Conflict Level", "Performance Tone", "ROE", "Combined Ratio", "Performance"
+            "State", "Strategy Bucket", "Conflict Arrow", "Conflict Level", "Performance Tone",
+            "ROE", "Combined Ratio", "Performance", "Binds", "Quotes to Binds", "CPB", "Avg. MRLTV"
         ]].sort_values(["Conflict Level", "State"])
         indicator_view["Indicator"] = np.where(
             indicator_view["Performance Tone"] == "Good",
@@ -1211,8 +1212,9 @@ def main() -> None:
             np.where(indicator_view["Performance Tone"] == "Poor", "🔴", "🟡"),
         )
         indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
+        indicator_view["Q2B"] = indicator_view["Quotes to Binds"]
         render_formatted_table(
-            indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance"]],
+            indicator_view[["State", "Strategy Bucket", "Match", "ROE", "Combined Ratio", "Performance", "Binds", "Q2B", "CPB", "Avg. MRLTV"]],
             use_container_width=True,
         )
 
