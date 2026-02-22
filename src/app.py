@@ -345,6 +345,7 @@ def build_model_tables(
             "Avg. MRLTV": "Seg Avg. MRLTV",
             "Clicks": "Seg Clicks",
             "Binds": "Seg Binds",
+            "Clicks to Binds": "Seg Clicks to Binds",
         }
     )
 
@@ -402,7 +403,13 @@ def build_model_tables(
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
 
     rec["Expected Additional Clicks"] = rec["Clicks"] * rec["Clicks Lift %"]
-    rate = rec["Clicks to Binds"]
+    # After merges, channel-level and seg-level bind rates may coexist; use seg rate when reliable.
+    channel_bind_rate = rec.get("Clicks to Binds")
+    if channel_bind_rate is None:
+        channel_bind_rate = np.nan
+    rec["Clicks to Binds Proxy"] = np.where(rec["Use Seg Perf"], rec["Seg Clicks to Binds"], channel_bind_rate)
+    rec["Clicks to Binds Proxy"] = rec["Clicks to Binds Proxy"].fillna(rec["Seg Clicks to Binds"])
+    rate = rec["Clicks to Binds Proxy"]
     rec["Expected Additional Binds"] = rec["Expected Additional Clicks"] * rate.fillna(0)
     rec["Expected Additional Cost"] = (
         (rec["Clicks"] + rec["Expected Additional Clicks"]) * rec["Avg. CPC"] * (1 + rec["CPC Lift %"])
