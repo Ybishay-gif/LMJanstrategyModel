@@ -1108,12 +1108,35 @@ def main() -> None:
                     if state_channels.empty:
                         st.info("No channel groups for selected segment filter.")
                     else:
+                        tab1_aggr = st.slider(
+                            "State table bid aggressiveness",
+                            min_value=0.5,
+                            max_value=3.0,
+                            value=1.0,
+                            step=0.1,
+                            key="tab1_cg_aggr",
+                        )
+                        state_channels["Scenario Target Adj %"] = state_channels["Applied Price Adjustment %"] * tab1_aggr
+                        state_channels["Scenario Target Adj %"] = np.minimum(
+                            state_channels["Scenario Target Adj %"], state_channels["Strategy Max Adj %"]
+                        )
+                        state_channels = apply_scenario_effects(state_channels, price_eval, "Scenario Target Adj %")
+                        state_channels["Scenario Lift Proxy %"] = state_channels["Scenario Lift Proxy %"].clip(lower=0)
+                        state_channels["Expected Additional Clicks"] = state_channels["Clicks"] * state_channels["Scenario Lift Proxy %"]
+                        state_channels["Expected Additional Binds"] = (
+                            state_channels["Expected Additional Clicks"] * state_channels["Clicks to Binds Proxy"].fillna(0)
+                        )
                         if "Total Click Cost" in state_channels.columns:
                             state_channels["Total Cost"] = state_channels["Total Click Cost"]
                         else:
                             state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
+                        state_channels["Expected Total Cost"] = (
+                            (state_channels["Clicks"] + state_channels["Expected Additional Clicks"])
+                            * state_channels["Avg. CPC"]
+                            * (1 + state_channels["Scenario CPC Lift %"].fillna(0))
+                        )
                         # Additional budget needed includes both additional volume and CPC increase.
-                        state_channels["Additional Budget Needed"] = state_channels["Expected Additional Cost"]
+                        state_channels["Additional Budget Needed"] = state_channels["Expected Total Cost"] - state_channels["Total Cost"]
                         state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["Additional Budget Needed"]
 
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
@@ -1123,10 +1146,10 @@ def main() -> None:
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
                             **{"Additional Budget Needed": ("Additional Budget Needed", "sum")},
-                            **{"Recommended Bid Adjustment": ("Applied Price Adjustment %", "median")},
+                            **{"Recommended Bid Adjustment": ("Scenario Bid Adjustment %", "median")},
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
-                            **{"CPC Lift %": ("CPC Lift %", "mean")},
+                            **{"CPC Lift %": ("Scenario CPC Lift %", "mean")},
                         ).sort_values("Expected Additional Clicks", ascending=False)
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
