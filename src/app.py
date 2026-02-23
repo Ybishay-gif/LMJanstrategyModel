@@ -2388,9 +2388,25 @@ def main() -> None:
                                 "Open Popup",
                             ]
                         ]
+                        for c in [
+                            "Bids", "SOV", "Clicks", "Binds", "Win Rate", "Total Cost",
+                            "Rec. Bid Adj.", "Selected Price Adj.", "Expected Total Cost",
+                            "Additional Budget Needed", "Expected Additional Clicks",
+                            "Expected Additional Binds", "CPC Lift %",
+                        ]:
+                            if c in table_df.columns:
+                                table_df[c] = pd.to_numeric(table_df[c], errors="coerce").fillna(0.0)
+
+                        # Use dot-free internal field names for AG Grid reliability.
+                        grid_df = table_df.rename(
+                            columns={
+                                "Rec. Bid Adj.": "Rec Bid Adj",
+                                "Selected Price Adj.": "Selected Price Adj",
+                            }
+                        )
 
                         selected_groups: list[str] = []
-                        edited = table_df.copy()
+                        edited = grid_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
 
                         if AGGRID_AVAILABLE:
@@ -2429,7 +2445,8 @@ def main() -> None:
                                 class SelectedAdjRenderer {
                                   init(params) {
                                     const v = params.value;
-                                    const txt = (v === null || v === undefined || v === '') ? '' : ((Number(v) >= 0 ? '+' : '') + Number(v).toFixed(0) + '%');
+                                    const n = Number(v);
+                                    const txt = (v === null || v === undefined || Number.isNaN(n)) ? '0%' : ((n >= 0 ? '+' : '') + n.toFixed(0) + '%');
                                     const isManual = (params.data && params.data['Selection Source'] === 'Manual');
                                     this.eGui = document.createElement('div');
                                     this.eGui.style.display = 'flex';
@@ -2465,12 +2482,12 @@ def main() -> None:
                             gb.configure_column("Binds", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
                             gb.configure_column("Win Rate", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
                             gb.configure_column("Total Cost", editable=False, width=108, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
-                            gb.configure_column("Selected Price Adj.", editable=False, width=140, cellRenderer=selected_adj_renderer)
+                            gb.configure_column("Rec Bid Adj", headerName="Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Selected Price Adj", headerName="Selected Price Adj.", editable=False, width=140, cellRenderer=selected_adj_renderer)
                             gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=60)
                             gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=116, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
+                            gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="(value == null || isNaN(Number(value))) ? '0' : Math.round(Number(value)).toLocaleString()")
                             gb.configure_column("Expected Additional Binds", editable=False, width=124, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
                             gb.configure_column("CPC Lift %", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Apply", editable=True, width=70)
@@ -2532,7 +2549,7 @@ def main() -> None:
                         if do_apply_bulk and selected_groups:
                             for cg in selected_groups:
                                 m = edited["Channel Groups"] == cg
-                                edited.loc[m, "Selected Price Adj."] = float(bulk_adj)
+                                edited.loc[m, "Selected Price Adj"] = float(bulk_adj)
                                 edited.loc[m, "Apply"] = True
                                 edited.loc[m, "Selection Source"] = "Manual"
                             st.session_state[draft_key] = edited
@@ -2549,7 +2566,7 @@ def main() -> None:
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
                                 if bool(rr.get("Apply", False)):
-                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj.", 0.0))}
+                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj", 0.0))}
                                 else:
                                     new_overrides.pop(okey, None)
                             st.session_state["bid_overrides"] = new_overrides
