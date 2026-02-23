@@ -1541,6 +1541,19 @@ def main() -> None:
             if row.empty:
                 st.warning("No state-level data found for the selected state.")
                 return
+            state_rows = rec_df[rec_df["State"] == selected_state].copy()
+            state_current_clicks = float(row["Clicks"].iloc[0]) if pd.notna(row["Clicks"].iloc[0]) else 0.0
+            state_add_clicks = float(state_rows["Expected Additional Clicks"].fillna(0).sum())
+            state_add_clicks_pct = (state_add_clicks / state_current_clicks) if state_current_clicks > 0 else np.nan
+            state_add_binds = float(state_rows["Expected Additional Binds"].fillna(0).sum())
+            if "Total Click Cost" in state_rows.columns:
+                state_current_budget = float(
+                    state_rows["Total Click Cost"].fillna(state_rows["Clicks"] * state_rows["Avg. CPC"]).sum()
+                )
+            else:
+                state_current_budget = float((state_rows["Clicks"] * state_rows["Avg. CPC"]).fillna(0).sum())
+            state_add_budget = float(state_rows["Expected Additional Cost"].fillna(0).sum())
+            state_add_budget_pct = (state_add_budget / state_current_budget) if state_current_budget > 0 else np.nan
             seg_view = state_seg_df[state_seg_df["State"] == selected_state].merge(
                 state_seg_extra_df[state_seg_extra_df["State"] == selected_state],
                 on=["State", "Segment"],
@@ -1582,13 +1595,20 @@ def main() -> None:
                     unsafe_allow_html=True,
                 )
 
-                c5, c6 = st.columns(2)
-                c5.metric("✨ State Additional Clicks", f"{row['Expected_Additional_Clicks'].iloc[0]:,.0f}")
-                c6.metric("🎉 State Additional Binds", f"{row['Expected_Additional_Binds'].iloc[0]:,.1f}")
+                c5, c6, c7, c8, c9 = st.columns(5)
+                c5.metric("🖱️ Current Clicks", f"{state_current_clicks:,.0f}")
+                c6.metric(
+                    "✨ Additional Clicks",
+                    f"{state_add_clicks:,.0f}",
+                    delta="n/a" if pd.isna(state_add_clicks_pct) else f"{state_add_clicks_pct:.1%}",
+                )
+                c7.metric("🎉 Additional Binds", f"{state_add_binds:,.1f}")
+                c8.metric("💰 Additional Budget Needed", f"${state_add_budget:,.0f}")
+                c9.metric("📊 Budget Impact", "n/a" if pd.isna(state_add_budget_pct) else f"{state_add_budget_pct:.1%}")
 
                 st.markdown("**🧩 Per-Segment KPI + Opportunity**")
                 seg_show = seg_view[[
-                    "Segment", "ROE Performance Group", "Performance Stat Sig",
+                    "Segment", "ROE Performance Group",
                     "Bids", "Avg. CPC", "Win Rate", "Q2B", "Clicks", "Binds", "Clicks to Binds", "ROE", "Combined Ratio", "Avg. MRLTV",
                     "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
@@ -1657,6 +1677,7 @@ def main() -> None:
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
                             Bids=("Bids", "sum"),
                             SOV=("SOV", "mean"),
+                            Clicks=("Clicks", "sum"),
                             **{"Win Rate": ("Bids to Clicks", "mean")},
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
@@ -1665,16 +1686,28 @@ def main() -> None:
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
                             **{"CPC Lift %": ("Scenario CPC Lift %", "mean")},
-                            **{"Intent Sig Coverage": ("Intent Stat Sig", "mean")},
-                            **{"Price Sig Coverage": ("Has Sig Price Evidence", "mean")},
                         ).sort_values("Expected Additional Clicks", ascending=False)
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
                             cg_state["Additional Budget Needed"] / cg_state["Total Cost"],
                             0,
                         )
-
-                        render_formatted_table(cg_state, use_container_width=True)
+                        cg_state_cols = [
+                            "Channel Groups",
+                            "Bids",
+                            "SOV",
+                            "Clicks",
+                            "Recommended Bid Adjustment",
+                            "Win Rate",
+                            "Total Cost",
+                            "Expected Total Cost",
+                            "Additional Budget Needed",
+                            "Total Cost Impact %",
+                            "Expected Additional Clicks",
+                            "Expected Additional Binds",
+                            "CPC Lift %",
+                        ]
+                        render_formatted_table(cg_state[cg_state_cols], use_container_width=True)
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
