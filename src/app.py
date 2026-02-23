@@ -1353,6 +1353,26 @@ def precompute_popup_options_for_state(
     return pd.concat(rows, ignore_index=True)
 
 
+def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, cpb_impact: float, sig_level: str) -> str:
+    cpb_txt = "n/a" if pd.isna(cpb_impact) else f"{cpb_impact:+.1%}"
+    return (
+        f"{adj:+.0f}%: {click_uplift:+.1%} Clicks || {cpc_uplift:+.1%} CPC || {cpb_txt} CPB "
+        f"({str(sig_level).lower()} stat-sig)"
+    )
+
+
+def parse_adj_from_label(label: str) -> float | None:
+    if not isinstance(label, str):
+        return None
+    m = re.match(r"\s*([+-]?\d+(?:\.\d+)?)%\s*:", label)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except Exception:
+        return None
+
+
 def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
     if not overrides:
         return rec_df
@@ -2357,8 +2377,11 @@ def main() -> None:
                         table_df["Selected Price Adj."] = table_df["Rec. Bid Adj."]
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
+                        popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         table_df["Explore"] = ""
                         table_df["Open Popup"] = False
+                        table_df["Adj Selection"] = ""
+                        table_df["Adj Options"] = [[] for _ in range(len(table_df))]
                         for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
@@ -2366,6 +2389,26 @@ def main() -> None:
                                 table_df.at[idx, "Apply"] = True
                                 table_df.at[idx, "Selected Price Adj."] = float(ov.get("adj", rr["Rec. Bid Adj."]))
                                 table_df.at[idx, "Selection Source"] = "Manual"
+                            ch = str(rr["Channel Groups"])
+                            ch_opts = popup_state_df[popup_state_df["Channel Groups"] == ch] if not popup_state_df.empty else pd.DataFrame()
+                            labels = []
+                            for _, op in ch_opts.iterrows():
+                                labels.append(
+                                    format_adj_option_label(
+                                        float(op.get("Bid Adj %", 0) or 0),
+                                        float(op.get("Win Rate Uplift", 0) or 0),
+                                        float(op.get("CPC Uplift", 0) or 0),
+                                        op.get("CPB Impact", np.nan),
+                                        str(op.get("Sig Level", "")),
+                                    )
+                                )
+                            if not labels:
+                                base_adj = float(table_df.at[idx, "Selected Price Adj."])
+                                labels = [f"{base_adj:+.0f}%: n/a Clicks || n/a CPC || n/a CPB (no stat-sig)"]
+                            table_df.at[idx, "Adj Options"] = labels
+                            current_adj = float(table_df.at[idx, "Selected Price Adj."])
+                            selected_label = next((lb for lb in labels if parse_adj_from_label(lb) == current_adj), labels[0])
+                            table_df.at[idx, "Adj Selection"] = selected_label
                         table_df = table_df[
                             [
                                 "Channel Groups",
@@ -2376,6 +2419,7 @@ def main() -> None:
                                 "Win Rate",
                                 "Total Cost",
                                 "Rec. Bid Adj.",
+                                "Adj Selection",
                                 "Selected Price Adj.",
                                 "Explore",
                                 "Expected Total Cost",
@@ -2386,6 +2430,7 @@ def main() -> None:
                                 "Apply",
                                 "Selection Source",
                                 "Open Popup",
+                                "Adj Options",
                             ]
                         ]
                         for c in [
@@ -2483,6 +2528,19 @@ def main() -> None:
                             gb.configure_column("Win Rate", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
                             gb.configure_column("Total Cost", editable=False, width=108, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Rec Bid Adj", headerName="Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column(
+                                "Adj Selection",
+                                editable=True,
+                                width=330,
+                                cellEditor="agRichSelectCellEditor",
+                                cellEditorParams=JsCode(
+                                    """
+                                    function(params) {
+                                      return { values: params.data && params.data['Adj Options'] ? params.data['Adj Options'] : [] };
+                                    }
+                                    """
+                                ),
+                            )
                             gb.configure_column("Selected Price Adj", headerName="Selected Price Adj.", editable=False, width=140, cellRenderer=selected_adj_renderer)
                             gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=60)
                             gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
@@ -2492,6 +2550,7 @@ def main() -> None:
                             gb.configure_column("CPC Lift %", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Apply", editable=True, width=70)
                             gb.configure_column("Selection Source", editable=False, width=104)
+                            gb.configure_column("Adj Options", hide=True)
                             go = gb.build()
                             custom_css = {
                                 ".ag-root-wrapper": {"background-color": "#0b1220", "border": "1px solid #1f2937", "border-radius": "10px"},
@@ -2513,6 +2572,27 @@ def main() -> None:
                                 key=f"tab1_aggrid_{selected_state}",
                             )
                             edited = pd.DataFrame(grid["data"])
+                            # Apply per-row dropdown selections immediately to manual overrides.
+                            changed = False
+                            new_overrides = dict(st.session_state.get("bid_overrides", {}))
+                            for _, rr in edited.iterrows():
+                                ch = str(rr.get("Channel Groups", ""))
+                                lbl = rr.get("Adj Selection", "")
+                                adj = parse_adj_from_label(lbl)
+                                if adj is None:
+                                    continue
+                                cur = float(rr.get("Selected Price Adj", 0) or 0)
+                                if abs(adj - cur) > 1e-9:
+                                    rr_m = edited["Channel Groups"] == ch
+                                    edited.loc[rr_m, "Selected Price Adj"] = float(adj)
+                                    edited.loc[rr_m, "Apply"] = True
+                                    edited.loc[rr_m, "Selection Source"] = "Manual"
+                                    new_overrides[f"{selected_state}|{ch}"] = {"apply": True, "adj": float(adj)}
+                                    changed = True
+                            if changed:
+                                st.session_state["bid_overrides"] = new_overrides
+                                st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
+                                st.rerun()
                             st.session_state[draft_key] = edited
                             selected_rows = grid.get("selected_rows", [])
                             if isinstance(selected_rows, list) and selected_rows:
@@ -2574,7 +2654,6 @@ def main() -> None:
                             st.rerun()
 
                         st.caption("Click the row `🔎` button to open popup. Use Save once for multiple row updates.")
-                        popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         target = st.session_state.get("tab1_explore_target")
                         if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
                             ch_sel = str(target.get("channel"))
