@@ -2375,6 +2375,7 @@ def main() -> None:
                         cg_state_cols = [c for c in cg_state_cols if c in cg_state.columns]
                         table_df = cg_state[cg_state_cols].copy()
                         table_df["Selected Price Adj."] = table_df["Rec. Bid Adj."]
+                        table_df["Select"] = False
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
                         popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
@@ -2410,6 +2411,7 @@ def main() -> None:
                         table_df = table_df[
                             [
                                 "Channel Groups",
+                                "Select",
                                 "Bids",
                                 "SOV",
                                 "Clicks",
@@ -2449,112 +2451,45 @@ def main() -> None:
                         selected_groups: list[str] = []
                         edited = grid_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
-
-                        if AGGRID_AVAILABLE:
-                            selected_adj_renderer = JsCode(
-                                """
-                                class SelectedAdjRenderer {
-                                  init(params) {
-                                    const v = params.value;
-                                    const n = Number(v);
-                                    const txt = (v === null || v === undefined || Number.isNaN(n)) ? '0%' : ((n >= 0 ? '+' : '') + n.toFixed(0) + '%');
-                                    const isManual = (params.data && params.data['Selection Source'] === 'Manual');
-                                    this.eGui = document.createElement('div');
-                                    this.eGui.style.display = 'flex';
-                                    this.eGui.style.alignItems = 'center';
-                                    this.eGui.style.gap = '6px';
-                                    const t = document.createElement('span');
-                                    t.innerText = txt;
-                                    this.eGui.appendChild(t);
-                                    if (isManual) {
-                                      const b = document.createElement('span');
-                                      b.innerText = 'Manual';
-                                      b.style.fontSize = '10px';
-                                      b.style.padding = '1px 6px';
-                                      b.style.borderRadius = '10px';
-                                      b.style.border = '1px solid #22c55e';
-                                      b.style.color = '#86efac';
-                                      b.style.background = 'rgba(34,197,94,0.12)';
-                                      this.eGui.appendChild(b);
-                                    }
-                                  }
-                                  getGui() { return this.eGui; }
-                                }
-                                """
-                            )
-                            gb = GridOptionsBuilder.from_dataframe(edited)
-                            gb.configure_default_column(resizable=True, sortable=True, filter=True)
-                            gb.configure_grid_options(singleClickEdit=True, stopEditingWhenCellsLoseFocus=True)
-                            gb.configure_selection("multiple", use_checkbox=True)
-                            gb.configure_column("Channel Groups", editable=False, pinned="left", width=178)
-                            gb.configure_column("Bids", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
-                            gb.configure_column("SOV", editable=False, width=76, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
-                            gb.configure_column("Clicks", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
-                            gb.configure_column("Binds", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
-                            gb.configure_column("Win Rate", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
-                            gb.configure_column("Total Cost", editable=False, width=108, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Rec Bid Adj", headerName="Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
-                            gb.configure_column(
-                                "Adj Selection",
-                                editable=True,
-                                width=330,
-                                cellEditor="agSelectCellEditor",
-                                cellEditorParams=JsCode(
-                                    """
-                                    function(params) {
-                                      return { values: params.data && params.data['Adj Options'] ? params.data['Adj Options'] : [] };
-                                    }
-                                    """
-                                ),
-                            )
-                            gb.configure_column("Selected Price Adj", headerName="Selected Price Adj.", editable=False, width=140, cellRenderer=selected_adj_renderer)
-                            gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=116, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="(value == null || isNaN(Number(value))) ? '0' : Math.round(Number(value)).toLocaleString()")
-                            gb.configure_column("Expected Additional Binds", editable=False, width=124, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
-                            gb.configure_column("CPC Lift %", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
-                            gb.configure_column("Apply", editable=True, width=70)
-                            gb.configure_column("Selection Source", editable=False, width=104)
-                            gb.configure_column("Adj Options", hide=True)
-                            go = gb.build()
-                            custom_css = {
-                                ".ag-root-wrapper": {"background-color": "#0b1220", "border": "1px solid #1f2937", "border-radius": "10px"},
-                                ".ag-header": {"background-color": "#0f172a !important", "color": "#cbd5e1"},
-                                ".ag-row": {"background-color": "#0b1220", "color": "#e2e8f0"},
-                                ".ag-row-hover": {"background-color": "#111827 !important"},
-                                ".ag-cell": {"border-color": "#1f2937"},
-                            }
-                            grid = AgGrid(
-                                edited,
-                                gridOptions=go,
-                                allow_unsafe_jscode=True,
-                                update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
-                                fit_columns_on_grid_load=True,
-                                reload_data=True,
-                                height=420,
-                                theme="balham-dark" if dark_mode else "balham",
-                                custom_css=custom_css,
-                                key=f"tab1_aggrid_{selected_state}",
-                            )
-                            edited = pd.DataFrame(grid["data"])
-                            # Stage dropdown selections in the row, but apply to model only on Save Edits.
-                            for i, rr in edited.iterrows():
-                                adj = parse_adj_from_label(rr.get("Adj Selection", ""))
-                                if adj is not None:
-                                    edited.at[i, "Selected Price Adj"] = float(adj)
-                                    edited.at[i, "Selection Source"] = "Manual"
-                                    edited.at[i, "Apply"] = True
-                            st.session_state[draft_key] = edited
-                            selected_rows = grid.get("selected_rows", [])
-                            if isinstance(selected_rows, list) and selected_rows:
-                                selected_groups = [str(r.get("Channel Groups")) for r in selected_rows if r.get("Channel Groups") is not None]
-                        else:
-                            st.warning("Install `streamlit-aggrid` to enable per-row popup button in table.")
-                            edited = st.data_editor(edited, use_container_width=True, hide_index=True, key=f"tab1_apply_editor_{selected_state}")
-                            st.session_state[draft_key] = edited
-                            selected_rows = edited[edited["Apply"] == True] if isinstance(edited, pd.DataFrame) and "Apply" in edited.columns else pd.DataFrame()
-                            if not selected_rows.empty:
-                                selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
+                        all_adj_options = sorted({x for xs in edited["Adj Options"].tolist() for x in (xs if isinstance(xs, list) else [])})
+                        edited = st.data_editor(
+                            edited,
+                            use_container_width=True,
+                            hide_index=True,
+                            key=f"tab1_apply_editor_{selected_state}",
+                            column_config={
+                                "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
+                                "Select": st.column_config.CheckboxColumn("Select"),
+                                "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
+                                "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
+                                "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
+                                "Binds": st.column_config.NumberColumn("Binds", format="%.2f", disabled=True),
+                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.2f%%", disabled=True),
+                                "Total Cost": st.column_config.NumberColumn("Total Cost", format="dollar", disabled=True),
+                                "Rec Bid Adj": st.column_config.NumberColumn("Rec. Bid Adj.", format="%+.0f%%", disabled=True),
+                                "Adj Selection": st.column_config.SelectboxColumn("Adj Selection", options=all_adj_options),
+                                "Selected Price Adj": st.column_config.NumberColumn("Selected Price Adj.", format="%+.0f%%", disabled=True),
+                                "Expected Total Cost": st.column_config.NumberColumn("Expected Total Cost", format="dollar", disabled=True),
+                                "Additional Budget Needed": st.column_config.NumberColumn("Adjusted Budget", format="dollar", disabled=True),
+                                "Expected Additional Clicks": st.column_config.NumberColumn("Expected Additional Clicks", format="localized", disabled=True),
+                                "Expected Additional Binds": st.column_config.NumberColumn("Expected Additional Binds", format="%.2f", disabled=True),
+                                "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
+                                "Apply": st.column_config.CheckboxColumn("Apply"),
+                                "Selection Source": st.column_config.TextColumn("Selection Source", disabled=True),
+                                "Adj Options": None,
+                            },
+                        )
+                        # Stage dropdown selections in rows (apply on Save).
+                        for i, rr in edited.iterrows():
+                            adj = parse_adj_from_label(rr.get("Adj Selection", ""))
+                            if adj is not None:
+                                edited.at[i, "Selected Price Adj"] = float(adj)
+                                edited.at[i, "Selection Source"] = "Manual"
+                                edited.at[i, "Apply"] = True
+                        st.session_state[draft_key] = edited
+                        selected_rows = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
+                        if not selected_rows.empty:
+                            selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
 
                         a1, a2, a3, a4 = st.columns([1.2, 1, 1, 1])
                         bulk_adj = a1.number_input(
