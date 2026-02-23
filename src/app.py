@@ -1377,6 +1377,22 @@ def parse_adj_from_label(label: str) -> Optional[float]:
         return None
 
 
+def nearest_available_adj(channel_group: str, target_adj: float, popup_state_df: pd.DataFrame) -> tuple[float, str]:
+    if popup_state_df is None or popup_state_df.empty:
+        return float(target_adj), "No test-point list found; used requested value."
+    opts = popup_state_df.loc[
+        popup_state_df["Channel Groups"].astype(str) == str(channel_group), "Bid Adj %"
+    ]
+    opts = pd.to_numeric(opts, errors="coerce").dropna().unique().tolist()
+    if not opts:
+        return float(target_adj), "No valid test points for this channel; used requested value."
+    opts = sorted(float(x) for x in opts)
+    mapped = min(opts, key=lambda x: (abs(x - float(target_adj)), x))
+    if abs(mapped - float(target_adj)) > 1e-9:
+        return mapped, f"Mapped to nearest valid test point ({mapped:+.0f}%)."
+    return mapped, "Exact test point."
+
+
 def to_bool(v) -> bool:
     if isinstance(v, (bool, np.bool_)):
         return bool(v)
@@ -1400,20 +1416,25 @@ def load_overrides_from_disk() -> dict:
             out = {}
             for k, v in data.items():
                 if isinstance(v, dict):
-                    out[str(k)] = {"apply": bool(v.get("apply", False)), "adj": float(v.get("adj", 0.0))}
+                    out[str(k)] = {
+                        "apply": bool(v.get("apply", False)),
+                        "adj": float(v.get("adj", 0.0)),
+                        "requested_adj": float(v.get("requested_adj", v.get("adj", 0.0))),
+                        "source": str(v.get("source", "manual")),
+                    }
             return out
     except Exception:
         return {}
     return {}
 
 
-def save_overrides_to_disk(overrides: dict) -> None:
+def save_overrides_to_disk(overrides: dict) -> tuple[bool, str]:
     try:
         OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
         OVERRIDES_PATH.write_text(json.dumps(overrides, indent=2))
+        return True, ""
     except Exception:
-        # Best-effort persistence; app still works with session state only.
-        pass
+        return False, "Failed to write manual overrides file."
 
 
 def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
@@ -2430,7 +2451,7 @@ def main() -> None:
                             ov = st.session_state["bid_overrides"].get(okey, {})
                             if isinstance(ov, dict) and ov.get("apply", False):
                                 table_df.at[idx, "Apply"] = True
-                                table_df.at[idx, "Selected Price Adj."] = float(ov.get("adj", rr["Rec. Bid Adj."]))
+                                table_df.at[idx, "Selected Price Adj."] = float(ov.get("requested_adj", ov.get("adj", rr["Rec. Bid Adj."])))
                                 table_df.at[idx, "Selection Source"] = "Manual adjustment"
                             ch = str(rr["Channel Groups"])
                             ch_opts = popup_state_df[popup_state_df["Channel Groups"] == ch] if not popup_state_df.empty else pd.DataFrame()
@@ -2654,15 +2675,53 @@ def main() -> None:
                         if do_save:
                             prev_overrides = dict(st.session_state.get("bid_overrides", {}))
                             new_overrides = dict(prev_overrides)
-                            changed_rows = 0
+                            audit_rows = []
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
                                 adj_from_dropdown = parse_adj_from_label(rr.get("Adj Selection", ""))
                                 rec_adj = float(rr.get("Rec Bid Adj", 0.0) or 0.0)
+                                prev = prev_overrides.get(okey, {})
+                                prev_adj = float(prev.get("adj", rec_adj)) if isinstance(prev, dict) else rec_adj
                                 if adj_from_dropdown is not None and abs(float(adj_from_dropdown) - rec_adj) > 1e-9:
-                                    new_overrides[okey] = {"apply": True, "adj": float(adj_from_dropdown)}
+                                    req_adj = float(adj_from_dropdown)
+                                    applied_adj, msg = nearest_available_adj(rr["Channel Groups"], req_adj, popup_state_df)
+                                    new_overrides[okey] = {
+                                        "apply": True,
+                                        "adj": float(applied_adj),
+                                        "requested_adj": float(req_adj),
+                                        "source": "manual",
+                                    }
+                                    audit_rows.append(
+                                        {
+                                            "State": selected_state,
+                                            "Channel Groups": rr["Channel Groups"],
+                                            "Previous Adj %": prev_adj,
+                                            "Requested Adj %": req_adj,
+                                            "Applied Adj %": applied_adj,
+                                            "Status": "Saved",
+                                            "Note": msg,
+                                        }
+                                    )
                                 elif to_bool(rr.get("Apply", False)):
-                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj", 0.0))}
+                                    req_adj = float(rr.get("Selected Price Adj", rec_adj) or rec_adj)
+                                    applied_adj, msg = nearest_available_adj(rr["Channel Groups"], req_adj, popup_state_df)
+                                    new_overrides[okey] = {
+                                        "apply": True,
+                                        "adj": float(applied_adj),
+                                        "requested_adj": float(req_adj),
+                                        "source": "manual",
+                                    }
+                                    audit_rows.append(
+                                        {
+                                            "State": selected_state,
+                                            "Channel Groups": rr["Channel Groups"],
+                                            "Previous Adj %": prev_adj,
+                                            "Requested Adj %": req_adj,
+                                            "Applied Adj %": applied_adj,
+                                            "Status": "Saved",
+                                            "Note": msg,
+                                        }
+                                    )
                                 else:
                                     new_overrides.pop(okey, None)
                             changed_keys = set(prev_overrides.keys()) ^ set(new_overrides.keys())
@@ -2674,13 +2733,21 @@ def main() -> None:
                             changed_rows = len(changed_keys)
                             with st.spinner("Saving adjustments and recalculating..."):
                                 st.session_state["bid_overrides"] = new_overrides
-                                save_overrides_to_disk(new_overrides)
+                                ok, err = save_overrides_to_disk(new_overrides)
+                            if not ok:
+                                st.error(err)
                             st.session_state["tab1_save_notice"] = f"Saved {changed_rows} manual adjustments."
+                            if audit_rows:
+                                st.session_state["tab1_save_audit"] = pd.DataFrame(audit_rows)
                             st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                             st.rerun()
 
                         if st.session_state.get("tab1_save_notice"):
                             st.success(st.session_state.pop("tab1_save_notice"))
+                        audit_df = st.session_state.get("tab1_save_audit")
+                        if isinstance(audit_df, pd.DataFrame) and not audit_df.empty:
+                            st.markdown("**Save Audit (latest action)**")
+                            render_formatted_table(audit_df, use_container_width=True)
                         st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
 
         st.markdown("**State Strategy vs Actual Indicator**")
