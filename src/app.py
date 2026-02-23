@@ -6,6 +6,11 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+    AGGRID_AVAILABLE = True
+except Exception:
+    AGGRID_AVAILABLE = False
 
 st.set_page_config(page_title="Insurance Growth Navigator", layout="wide")
 
@@ -1872,62 +1877,59 @@ def main() -> None:
         fig0.update_layout(margin=dict(l=0, r=0, t=40, b=0), template=plotly_template)
         st.plotly_chart(fig0, use_container_width=True, key="state_map_tab0")
 
-        if not fast_mode:
-            st.markdown("**Product Strategy Sections**")
-            for strat in [s for s in STRATEGY_COLOR.keys() if s in map_df0["Strategy Bucket"].dropna().unique().tolist()]:
-                st_sec = state_df[state_df["Strategy Bucket"] == strat]
-                rec_sec = sim_all[sim_all["Strategy Bucket"] == strat]
-                if st_sec.empty:
-                    continue
-                states_txt = ", ".join(sorted(st_sec["State"].dropna().unique().tolist()))
-                s_clicks = float(pd.to_numeric(st_sec["Clicks"], errors="coerce").fillna(0).sum())
-                s_binds = float(pd.to_numeric(st_sec["Binds"], errors="coerce").fillna(0).sum())
-                s_bids = float(pd.to_numeric(rec_sec["Bids"], errors="coerce").fillna(0).sum())
-                s_clicks_ch = float(pd.to_numeric(rec_sec["Clicks"], errors="coerce").fillna(0).sum())
-                s_wr = (s_clicks_ch / s_bids) if s_bids > 0 else np.nan
-                s_cost = float(pd.to_numeric(rec_sec["Current Cost Sim"], errors="coerce").fillna(0).sum())
-                s_cpb = (s_cost / s_binds) if s_binds > 0 else np.nan
-                s_roe = _safe_weighted_mean(st_sec["ROE"], st_sec["Binds"])
-                s_cr = _safe_weighted_mean(st_sec["Combined Ratio"], st_sec["Binds"])
-                s_ltv = _safe_weighted_mean(st_sec["Avg. MRLTV"], st_sec["Binds"])
-                s_add_clicks = float(pd.to_numeric(rec_sec["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
-                s_add_binds = float(pd.to_numeric(rec_sec["Expected Additional Binds"], errors="coerce").fillna(0).sum())
-                s_add_budget = float(pd.to_numeric(rec_sec["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
+        st.markdown("**Product Strategy Sections**")
+        for strat in [s for s in STRATEGY_COLOR.keys() if s in map_df0["Strategy Bucket"].dropna().unique().tolist()]:
+            st_sec = state_df[state_df["Strategy Bucket"] == strat]
+            rec_sec = sim_all[sim_all["Strategy Bucket"] == strat]
+            if st_sec.empty:
+                continue
+            states_txt = ", ".join(sorted(st_sec["State"].dropna().unique().tolist()))
+            s_clicks = float(pd.to_numeric(st_sec["Clicks"], errors="coerce").fillna(0).sum())
+            s_binds = float(pd.to_numeric(st_sec["Binds"], errors="coerce").fillna(0).sum())
+            s_bids = float(pd.to_numeric(rec_sec["Bids"], errors="coerce").fillna(0).sum())
+            s_clicks_ch = float(pd.to_numeric(rec_sec["Clicks"], errors="coerce").fillna(0).sum())
+            s_wr = (s_clicks_ch / s_bids) if s_bids > 0 else np.nan
+            s_cost = float(pd.to_numeric(rec_sec["Current Cost Sim"], errors="coerce").fillna(0).sum())
+            s_cpb = (s_cost / s_binds) if s_binds > 0 else np.nan
+            s_roe = _safe_weighted_mean(st_sec["ROE"], st_sec["Binds"])
+            s_cr = _safe_weighted_mean(st_sec["Combined Ratio"], st_sec["Binds"])
+            s_ltv = _safe_weighted_mean(st_sec["Avg. MRLTV"], st_sec["Binds"])
+            s_add_clicks = float(pd.to_numeric(rec_sec["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
+            s_add_binds = float(pd.to_numeric(rec_sec["Expected Additional Binds"], errors="coerce").fillna(0).sum())
+            s_add_budget = float(pd.to_numeric(rec_sec["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
 
-                with st.container(border=True):
-                    st.markdown(f"**{strat}**")
-                    st.caption(f"States: {states_txt}")
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("Clicks", f"{s_clicks:,.0f}")
-                    c2.metric("Cost", f"${s_cost:,.0f}")
-                    c3.metric("Win Rate", "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}")
-                    c4.metric("Binds", f"{s_binds:,.0f}")
-                    c5.metric("CPB", "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}")
-                    c6, c7, c8 = st.columns(3)
-                    c6.metric("ROE", "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}")
-                    c7.metric("LTV", "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}")
-                    c8.metric("Combined Ratio", "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}")
-                    c9, c10, c11 = st.columns(3)
-                    c9.metric("Additional Clicks", f"{s_add_clicks:,.0f}")
-                    c10.metric("Additional Binds", f"{s_add_binds:,.1f}")
-                    c11.metric("Required Budget", f"${s_add_budget:,.0f}")
+            with st.container(border=True):
+                st.markdown(f"**{strat}**")
+                st.caption(f"States: {states_txt}")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Clicks", f"{s_clicks:,.0f}")
+                c2.metric("Cost", f"${s_cost:,.0f}")
+                c3.metric("Win Rate", "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}")
+                c4.metric("Binds", f"{s_binds:,.0f}")
+                c5.metric("CPB", "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}")
+                c6, c7, c8 = st.columns(3)
+                c6.metric("ROE", "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}")
+                c7.metric("LTV", "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}")
+                c8.metric("Combined Ratio", "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}")
+                c9, c10, c11 = st.columns(3)
+                c9.metric("Additional Clicks", f"{s_add_clicks:,.0f}")
+                c10.metric("Additional Binds", f"{s_add_binds:,.1f}")
+                c11.metric("Required Budget", f"${s_add_budget:,.0f}")
 
-                    seg_tbl = rec_sec.groupby("Segment", as_index=False).agg(
-                        Clicks=("Clicks", "sum"),
-                        Bids=("Bids", "sum"),
-                        Cost=("Current Cost Sim", "sum"),
-                        Binds=("Binds", "sum"),
-                        ROE=("ROE Proxy", "mean"),
-                        Combined_Ratio=("CR Proxy", "mean"),
-                        LTV=("MRLTV Proxy", "mean"),
-                    )
-                    seg_tbl["Win Rate"] = np.where(seg_tbl["Bids"] > 0, seg_tbl["Clicks"] / seg_tbl["Bids"], np.nan)
-                    seg_tbl["CPB"] = np.where(seg_tbl["Binds"] > 0, seg_tbl["Cost"] / seg_tbl["Binds"], np.nan)
-                    seg_tbl = seg_tbl[["Segment", "Clicks", "Cost", "Win Rate", "Binds", "CPB", "ROE", "LTV", "Combined_Ratio"]]
-                    seg_tbl = seg_tbl.rename(columns={"Combined_Ratio": "Combined Ratio"})
-                    render_formatted_table(seg_tbl, use_container_width=True)
-        else:
-            st.caption("Fast mode on: product strategy section collapsed for faster interactions.")
+                seg_tbl = rec_sec.groupby("Segment", as_index=False).agg(
+                    Clicks=("Clicks", "sum"),
+                    Bids=("Bids", "sum"),
+                    Cost=("Current Cost Sim", "sum"),
+                    Binds=("Binds", "sum"),
+                    ROE=("ROE Proxy", "mean"),
+                    Combined_Ratio=("CR Proxy", "mean"),
+                    LTV=("MRLTV Proxy", "mean"),
+                )
+                seg_tbl["Win Rate"] = np.where(seg_tbl["Bids"] > 0, seg_tbl["Clicks"] / seg_tbl["Bids"], np.nan)
+                seg_tbl["CPB"] = np.where(seg_tbl["Binds"] > 0, seg_tbl["Cost"] / seg_tbl["Binds"], np.nan)
+                seg_tbl = seg_tbl[["Segment", "Clicks", "Cost", "Win Rate", "Binds", "CPB", "ROE", "LTV", "Combined_Ratio"]]
+                seg_tbl = seg_tbl.rename(columns={"Combined_Ratio": "Combined Ratio"})
+                render_formatted_table(seg_tbl, use_container_width=True)
 
     with tabs[1]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
@@ -2315,11 +2317,11 @@ def main() -> None:
                             "CPC Lift %",
                         ]
                         table_df = cg_state[cg_state_cols].copy()
-                        table_df["Select"] = False
                         table_df["Selected Bid Adjustment"] = table_df["Recommended Bid Adjustment"]
-                        table_df["Explore 🔎"] = False
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
+                        table_df["Open 🔎"] = "🔎"
+                        table_df["Open Popup"] = False
                         for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
@@ -2327,55 +2329,83 @@ def main() -> None:
                                 table_df.at[idx, "Apply"] = True
                                 table_df.at[idx, "Selected Bid Adjustment"] = float(ov.get("adj", rr["Recommended Bid Adjustment"]))
                                 table_df.at[idx, "Selection Source"] = "Manual"
-                        col_order = [
-                            "Select",
-                            "Channel Groups",
-                            "Bids",
-                            "SOV",
-                            "Clicks",
-                            "Recommended Bid Adjustment",
-                            "Selected Bid Adjustment",
-                            "Explore 🔎",
-                            "Apply",
-                            "Selection Source",
-                            "Win Rate",
-                            "Total Cost",
-                            "Expected Total Cost",
-                            "Additional Budget Needed",
-                            "Total Cost Impact %",
-                            "Expected Additional Clicks",
-                            "Expected Additional Binds",
-                            "CPC Lift %",
-                        ]
-                        table_df = table_df[col_order]
 
-                        edited = st.data_editor(
-                            table_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            key=f"tab1_apply_editor_{selected_state}",
-                            column_order=col_order,
-                            column_config={
-                                "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
-                                "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
-                                "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
-                                "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
-                                "Select": st.column_config.CheckboxColumn("Select"),
-                                "Recommended Bid Adjustment": st.column_config.NumberColumn("Recommended", format="%+.0f%%", disabled=True),
-                                "Selected Bid Adjustment": st.column_config.NumberColumn("Selected", format="%+.0f%%"),
-                                "Explore 🔎": st.column_config.CheckboxColumn("🔎"),
-                                "Apply": st.column_config.CheckboxColumn("Apply"),
-                                "Selection Source": st.column_config.TextColumn("Selection", disabled=True),
-                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.2f%%", disabled=True),
-                                "Total Cost": st.column_config.NumberColumn("Total Cost", format="dollar", disabled=True),
-                                "Expected Total Cost": st.column_config.NumberColumn("Expected Total Cost", format="dollar", disabled=True),
-                                "Additional Budget Needed": st.column_config.NumberColumn("Additional Budget Needed", format="dollar", disabled=True),
-                                "Total Cost Impact %": st.column_config.NumberColumn("Total Cost Impact %", format="%.0f%%", disabled=True),
-                                "Expected Additional Clicks": st.column_config.NumberColumn("Expected Additional Clicks", format="localized", disabled=True),
-                                "Expected Additional Binds": st.column_config.NumberColumn("Expected Additional Binds", format="localized", disabled=True),
-                                "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
-                            },
-                        )
+                        # Display percentages as points (e.g., 12 means 12%).
+                        table_df["CPC Lift %"] = table_df["CPC Lift %"].fillna(0) * 100.0
+                        table_df["Total Cost Impact %"] = table_df["Total Cost Impact %"].fillna(0) * 100.0
+
+                        selected_groups: list[str] = []
+                        edited = table_df.copy()
+                        draft_key = f"tab1_grid_draft_{selected_state}"
+                        prev = st.session_state.get(draft_key)
+                        if isinstance(prev, pd.DataFrame):
+                            if set(prev["Channel Groups"]) == set(table_df["Channel Groups"]):
+                                edited = prev.copy()
+
+                        if AGGRID_AVAILABLE:
+                            button_renderer = JsCode(
+                                """
+                                class OpenBtnRenderer {
+                                  init(params) {
+                                    this.params = params;
+                                    this.eGui = document.createElement('button');
+                                    this.eGui.innerText = '🔎';
+                                    this.eGui.style.cursor = 'pointer';
+                                    this.eGui.style.border = '1px solid #334155';
+                                    this.eGui.style.borderRadius = '8px';
+                                    this.eGui.style.padding = '2px 8px';
+                                    this.eGui.style.background = '#0f172a';
+                                    this.eGui.style.color = '#e2e8f0';
+                                    this.eGui.addEventListener('click', (e) => {
+                                      e.stopPropagation();
+                                      params.node.setDataValue('Open Popup', true);
+                                    });
+                                  }
+                                  getGui() { return this.eGui; }
+                                }
+                                """
+                            )
+                            gb = GridOptionsBuilder.from_dataframe(edited)
+                            gb.configure_default_column(resizable=True, sortable=True, filter=True)
+                            gb.configure_selection("multiple", use_checkbox=True)
+                            gb.configure_column("Channel Groups", editable=False, pinned="left")
+                            gb.configure_column("Open 🔎", headerName="Explore", cellRenderer=button_renderer, editable=False, width=95)
+                            gb.configure_column("Open Popup", hide=True)
+                            gb.configure_column("Selected Bid Adjustment", editable=True)
+                            gb.configure_column("Apply", editable=True)
+                            gb.configure_column("Selection Source", editable=False)
+                            go = gb.build()
+                            grid = AgGrid(
+                                edited,
+                                gridOptions=go,
+                                allow_unsafe_jscode=True,
+                                update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+                                fit_columns_on_grid_load=False,
+                                height=420,
+                                theme="balham-dark" if dark_mode else "balham",
+                                key=f"tab1_aggrid_{selected_state}",
+                            )
+                            edited = pd.DataFrame(grid["data"])
+                            st.session_state[draft_key] = edited
+                            selected_rows = grid.get("selected_rows", [])
+                            if isinstance(selected_rows, list) and selected_rows:
+                                selected_groups = [str(r.get("Channel Groups")) for r in selected_rows if r.get("Channel Groups") is not None]
+                        else:
+                            st.warning("Install `streamlit-aggrid` to enable per-row popup button in table.")
+                            edited = st.data_editor(edited, use_container_width=True, hide_index=True, key=f"tab1_apply_editor_{selected_state}")
+                            st.session_state[draft_key] = edited
+                            selected_rows = edited[edited["Apply"] == True] if isinstance(edited, pd.DataFrame) and "Apply" in edited.columns else pd.DataFrame()
+                            if not selected_rows.empty:
+                                selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
+
+                        # One-click row button opens popup.
+                        open_rows = edited[edited["Open Popup"] == True] if "Open Popup" in edited.columns else pd.DataFrame()
+                        if not open_rows.empty:
+                            ch_open = str(open_rows.iloc[0]["Channel Groups"])
+                            st.session_state["tab1_explore_target"] = {"state": selected_state, "channel": ch_open}
+                            st.session_state["tab1_last_explore_marker"] = f"{selected_state}|{ch_open}"
+                            edited["Open Popup"] = False
+                            st.session_state[draft_key] = edited
 
                         a1, a2, a3, a4 = st.columns([1.2, 1, 1, 1])
                         bulk_adj = a1.number_input(
@@ -2390,42 +2420,33 @@ def main() -> None:
                         do_revert_bulk = a3.button("Revert Selected", key=f"tab1_revert_selected_{selected_state}")
                         do_save = a4.button("Save Edits", key=f"tab1_save_edits_{selected_state}")
 
-                        selected_rows = edited[edited["Select"] == True].copy() if "Select" in edited.columns else pd.DataFrame()
-                        selected_groups = selected_rows["Channel Groups"].tolist() if not selected_rows.empty else []
-
                         if do_apply_bulk and selected_groups:
-                            new_overrides = dict(st.session_state["bid_overrides"])
                             for cg in selected_groups:
-                                new_overrides[f"{selected_state}|{cg}"] = {"apply": True, "adj": float(bulk_adj)}
-                            st.session_state["bid_overrides"] = new_overrides
+                                m = edited["Channel Groups"] == cg
+                                edited.loc[m, "Selected Bid Adjustment"] = float(bulk_adj)
+                                edited.loc[m, "Apply"] = True
+                                edited.loc[m, "Selection Source"] = "Manual"
+                            st.session_state[draft_key] = edited
                             st.rerun()
                         if do_revert_bulk and selected_groups:
-                            new_overrides = dict(st.session_state["bid_overrides"])
                             for cg in selected_groups:
-                                new_overrides.pop(f"{selected_state}|{cg}", None)
-                            st.session_state["bid_overrides"] = new_overrides
+                                m = edited["Channel Groups"] == cg
+                                edited.loc[m, "Apply"] = False
+                                edited.loc[m, "Selection Source"] = "Suggested"
+                            st.session_state[draft_key] = edited
                             st.rerun()
-                        explore_channels = edited[edited["Explore 🔎"] == True]["Channel Groups"].tolist()
-                        if explore_channels:
-                            marker = f"{selected_state}|{explore_channels[0]}"
-                            if st.session_state.get("tab1_last_explore_marker") != marker:
-                                st.session_state["tab1_explore_target"] = {
-                                    "state": selected_state,
-                                    "channel": explore_channels[0],
-                                }
-                                st.session_state["tab1_last_explore_marker"] = marker
                         if do_save:
                             new_overrides = dict(st.session_state["bid_overrides"])
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
-                                if bool(rr["Apply"]):
-                                    new_overrides[okey] = {"apply": True, "adj": float(rr["Selected Bid Adjustment"])}
+                                if bool(rr.get("Apply", False)):
+                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Bid Adjustment", 0.0))}
                                 else:
                                     new_overrides.pop(okey, None)
                             st.session_state["bid_overrides"] = new_overrides
                             st.rerun()
 
-                        st.caption("Click the `🔎` icon in a row to open popup immediately. Use `Save Edits` once after sorting/checking rows.")
+                        st.caption("Click the row `🔎` button to open popup. Use Save once for multiple row updates.")
                         target = st.session_state.get("tab1_explore_target")
                         if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
                             ch_sel = str(target.get("channel"))
