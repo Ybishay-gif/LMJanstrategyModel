@@ -1156,6 +1156,88 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
     return out
 
 
+def _recompute_row_metrics(row: pd.Series) -> pd.Series:
+    r = row.copy()
+    wr = r.get("Win Rate Lift %", np.nan)
+    cpc = r.get("CPC Lift %", np.nan)
+    bids = float(r.get("Bids", 0) or 0)
+    clicks = float(r.get("Clicks", 0) or 0)
+    avg_cpc = float(r.get("Avg. CPC", 0) or 0)
+    wr_base = r.get("Bids to Clicks", np.nan)
+    if pd.isna(wr_base):
+        wr_base = (clicks / bids) if bids > 0 else 0.0
+    wr = 0.0 if pd.isna(wr) else float(wr)
+    cpc = 0.0 if pd.isna(cpc) else float(cpc)
+    add_clicks = bids * float(wr_base) * max(wr, 0.0)
+    c2b = r.get("Clicks to Binds Proxy", np.nan)
+    if pd.isna(c2b):
+        c2b = r.get("Clicks to Binds", np.nan)
+    if pd.isna(c2b):
+        c2b = 0.0
+    add_binds = add_clicks * float(c2b)
+    current_cost = r.get("Total Click Cost", np.nan)
+    if pd.isna(current_cost):
+        current_cost = clicks * avg_cpc
+    expected_total_cost = (clicks + add_clicks) * avg_cpc * (1 + cpc)
+    r["Expected Additional Clicks"] = add_clicks
+    r["Expected Additional Binds"] = add_binds
+    r["Expected Additional Cost"] = expected_total_cost - float(current_cost)
+    return r
+
+
+def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
+    if not overrides:
+        return rec_df
+    rec = rec_df.copy()
+    state_dict, channel_dict = _build_effect_dicts(price_eval_df, settings)
+    for i, row in rec.iterrows():
+        key = f"{row.get('State','')}|{row.get('Channel Groups','')}"
+        o = overrides.get(key)
+        if not isinstance(o, dict) or not o.get("apply", False):
+            continue
+        target = float(o.get("adj", row.get("Applied Price Adjustment %", 0.0)))
+        g = state_dict.get((str(row.get("State", "")), str(row.get("Channel Groups", ""))))
+        if g is None or g.empty:
+            g = channel_dict.get(str(row.get("Channel Groups", "")))
+        if g is None or g.empty:
+            continue
+        gg = g.copy()
+        gg["dist"] = (gg["Price Adjustment Percent"] - target).abs()
+        near = gg.sort_values(["dist", "Price Adjustment Percent"], ascending=[True, True]).iloc[0]
+        rec.at[i, "Suggested Price Adjustment %"] = target
+        rec.at[i, "Applied Price Adjustment %"] = near.get("Price Adjustment Percent", 0.0)
+        rec.at[i, "Clicks Lift %"] = near.get("Clicks Lift %", 0.0)
+        rec.at[i, "Win Rate Lift %"] = near.get("Win Rate Lift %", 0.0)
+        rec.at[i, "CPC Lift %"] = near.get("CPC Lift %", 0.0)
+        rec.at[i, "Lift Proxy %"] = rec.at[i, "Win Rate Lift %"]
+        rec.at[i, "Recommendation"] = "User Applied"
+        rec.loc[i] = _recompute_row_metrics(rec.loc[i])
+    return rec
+
+
+def summarize_from_rec(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    state_extra = rec.groupby("State", as_index=False).agg(
+        Expected_Additional_Clicks=("Expected Additional Clicks", "sum"),
+        Expected_Additional_Binds=("Expected Additional Binds", "sum"),
+    )
+    state_seg_extra = rec.groupby(["State", "Segment"], as_index=False).agg(
+        Expected_Additional_Clicks=("Expected Additional Clicks", "sum"),
+        Expected_Additional_Binds=("Expected Additional Binds", "sum"),
+    )
+    channel_summary = rec.groupby(["Channel Groups", "Segment"], as_index=False).agg(
+        Clicks=("Clicks", "sum"),
+        Suggested_Price_Adjustment_pct=("Suggested Price Adjustment %", "median"),
+        Expected_Additional_Clicks=("Expected Additional Clicks", "sum"),
+        Expected_Additional_Binds=("Expected Additional Binds", "sum"),
+        ROE=("ROE Proxy", "mean"),
+        Combined_Ratio=("CR Proxy", "mean"),
+        Avg_MRLTV=("MRLTV Proxy", "mean"),
+        States=("State", lambda x: ", ".join(sorted(set(x)))),
+        Strategy_Buckets=("Strategy Bucket", lambda x: ", ".join(sorted(set(x.dropna())))),
+    )
+    return state_extra, state_seg_extra, channel_summary
+
+
 STRATEGY_ORDER = [
     "Strongest Momentum",
     "Moderate Momentum",
@@ -1580,6 +1662,10 @@ def main() -> None:
     rec_df, state_extra_df, state_seg_extra_df, channel_summary_df = build_model_tables(
         state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
     )
+    if "bid_overrides" not in st.session_state:
+        st.session_state["bid_overrides"] = {}
+    rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
+    state_extra_df, state_seg_extra_df, channel_summary_df = summarize_from_rec(rec_df)
 
     tabs = st.tabs([
         "🏁 Tab 0: Executive State View",
@@ -2083,6 +2169,87 @@ def main() -> None:
                             "CPC Lift %",
                         ]
                         render_formatted_table(cg_state[cg_state_cols], use_container_width=True)
+
+                        st.markdown("**Apply Manual Bid Adjustments**")
+                        controls = cg_state[["Channel Groups", "Recommended Bid Adjustment"]].copy()
+                        controls["Selected Bid Adjustment"] = controls["Recommended Bid Adjustment"]
+                        controls["Apply"] = False
+                        for idx, rr in controls.iterrows():
+                            okey = f"{selected_state}|{rr['Channel Groups']}"
+                            ov = st.session_state["bid_overrides"].get(okey, {})
+                            if isinstance(ov, dict) and ov.get("apply", False):
+                                controls.at[idx, "Apply"] = True
+                                controls.at[idx, "Selected Bid Adjustment"] = float(ov.get("adj", rr["Recommended Bid Adjustment"]))
+                        edited = st.data_editor(
+                            controls,
+                            use_container_width=True,
+                            hide_index=True,
+                            key=f"tab1_apply_editor_{selected_state}",
+                            column_config={
+                                "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
+                                "Recommended Bid Adjustment": st.column_config.NumberColumn("Recommended", format="%+.0f%%", disabled=True),
+                                "Selected Bid Adjustment": st.column_config.NumberColumn("Selected", format="%+.0f%%"),
+                                "Apply": st.column_config.CheckboxColumn("Apply"),
+                            },
+                        )
+                        new_overrides = dict(st.session_state["bid_overrides"])
+                        for _, rr in edited.iterrows():
+                            okey = f"{selected_state}|{rr['Channel Groups']}"
+                            if bool(rr["Apply"]):
+                                new_overrides[okey] = {"apply": True, "adj": float(rr["Selected Bid Adjustment"])}
+                            else:
+                                new_overrides.pop(okey, None)
+                        if new_overrides != st.session_state["bid_overrides"]:
+                            st.session_state["bid_overrides"] = new_overrides
+                            st.rerun()
+
+                        with st.popover("🔎 Explore Alternative Adjustments"):
+                            ch_opts = sorted(state_channels["Channel Groups"].dropna().unique().tolist())
+                            ch_sel = st.selectbox("Channel Group", options=ch_opts, key=f"tab1_explore_channel_{selected_state}")
+                            mode_settings = Settings(**{**settings.__dict__, "optimization_mode": settings.optimization_mode})
+                            st_dict, ch_dict = _build_effect_dicts(price_eval, mode_settings)
+                            curve = st_dict.get((selected_state, ch_sel))
+                            if curve is None or curve.empty:
+                                curve = ch_dict.get(ch_sel)
+                            if curve is None or curve.empty:
+                                st.info("No valid stat-sig adjustment points under current guardrails.")
+                            else:
+                                rsel = state_channels[state_channels["Channel Groups"] == ch_sel].copy()
+                                wr_fb = pd.Series(np.where(rsel["Bids"] > 0, rsel["Clicks"] / rsel["Bids"], 0), index=rsel.index)
+                                base_wr = rsel["Bids to Clicks"].combine_first(wr_fb).fillna(0)
+                                c2b = rsel["Clicks to Binds Proxy"].fillna(rsel.get("Clicks to Binds", 0)).fillna(0)
+                                base_cost = np.where(rsel["Total Click Cost"].notna(), rsel["Total Click Cost"], rsel["Clicks"] * rsel["Avg. CPC"])
+                                out_rows = []
+                                for _, cr in curve.sort_values("Price Adjustment Percent").iterrows():
+                                    wr_l = float(cr.get("Win Rate Lift %", 0) or 0)
+                                    cpc_l = float(cr.get("CPC Lift %", 0) or 0)
+                                    add_clicks = (rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0)).sum()
+                                    add_binds = (rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0) * c2b).sum()
+                                    exp_cost = ((rsel["Clicks"] + (rsel["Bids"] * base_wr * max(wr_l, 0))) * rsel["Avg. CPC"] * (1 + cpc_l)).sum()
+                                    cur_cost = np.nansum(base_cost)
+                                    add_budget = exp_cost - cur_cost
+                                    cur_binds = rsel["Binds"].fillna(0).sum()
+                                    tar = rsel["Target CPB"].replace(0, np.nan).mean()
+                                    act_cpb = (cur_cost / cur_binds) if cur_binds > 0 else np.nan
+                                    new_cpb = (exp_cost / (cur_binds + add_binds)) if (cur_binds + add_binds) > 0 else np.nan
+                                    act_perf = (tar / act_cpb) if pd.notna(tar) and pd.notna(act_cpb) and act_cpb > 0 else np.nan
+                                    new_perf = (tar / new_cpb) if pd.notna(tar) and pd.notna(new_cpb) and new_cpb > 0 else np.nan
+                                    out_rows.append(
+                                        {
+                                            "Bid Adj %": float(cr["Price Adjustment Percent"]),
+                                            "Win Rate Uplift": wr_l,
+                                            "CPC Uplift": cpc_l,
+                                            "Additional Clicks": add_clicks,
+                                            "Additional Binds": add_binds,
+                                            "Expected Total Cost": exp_cost,
+                                            "Additional Budget Needed": add_budget,
+                                            "Expected CPB": new_cpb,
+                                            "Expected Performance": new_perf,
+                                            "Perf Delta": (new_perf - act_perf) if pd.notna(new_perf) and pd.notna(act_perf) else np.nan,
+                                        }
+                                    )
+                                out_df = pd.DataFrame(out_rows).sort_values("Bid Adj %")
+                                render_formatted_table(out_df, use_container_width=True)
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
