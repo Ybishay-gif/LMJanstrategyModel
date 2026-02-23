@@ -511,9 +511,8 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
     )
 
     out["Growth Opportunity Score"] = (
-        0.50 * out["Clicks Lift %"].fillna(0)
-        + 0.30 * out["Win Rate Lift %"].fillna(0)
-        + 0.20 * (1 - out["Baseline SOV"].fillna(0.5))
+        0.70 * out["Win Rate Lift %"].fillna(0)
+        + 0.30 * (1 - out["Baseline SOV"].fillna(0.5))
         - settings.cpc_penalty_weight * np.maximum(out["CPC Lift %"].fillna(0), 0)
     )
 
@@ -521,11 +520,11 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
         (out["Stat Sig Price Point"] == True)
         & (out["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0)
         & (out["Price Adjustment Percent"].fillna(0) >= 0)
-        & (out["Clicks Lift %"].fillna(0) >= 0)
+        & (out["Win Rate Lift %"].fillna(0) >= 0)
     ].copy()
-    # Binds growth objective: prioritize click lift first (proxy for additional binds), then win-rate/growth score.
+    # Choose test point by win-rate upside first, then growth score.
     best = feasible.sort_values(
-        ["Clicks Lift %", "Win Rate Lift %", "Growth Opportunity Score"],
+        ["Win Rate Lift %", "Growth Opportunity Score"],
         ascending=False,
     ).groupby("Channel Groups", as_index=False).first()
     # Ensure every channel group has a default baseline candidate.
@@ -664,10 +663,9 @@ def build_model_tables(
     rec["Win Rate Lift %"] = rec["Win Rate Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
     rec.loc[~rec["Has Sig Price Evidence"], ["Suggested Price Adjustment %", "Applied Price Adjustment %", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]] = 0.0
-    # Use the stronger of measured click lift and win-rate lift as growth proxy for state-level upside.
-    rec["Lift Proxy %"] = np.maximum(rec["Clicks Lift %"], rec["Win Rate Lift %"])
-    # Growth objective: do not apply positive/neutral adjustments that predict lower clicks.
-    no_growth = rec["Lift Proxy %"] < 0
+    # Growth is based on win-rate uplift applied to the row's bid volume.
+    rec["Lift Proxy %"] = rec["Win Rate Lift %"]
+    no_growth = rec["Win Rate Lift %"] < 0
     rec.loc[no_growth, "Suggested Price Adjustment %"] = 0
     rec.loc[no_growth, "Applied Price Adjustment %"] = 0
     rec.loc[no_growth, "Clicks Lift %"] = 0
@@ -675,30 +673,15 @@ def build_model_tables(
     rec.loc[no_growth, "Lift Proxy %"] = 0
     rec.loc[no_growth, "CPC Lift %"] = 0
 
-    rec["Test-based Additional Clicks"] = np.where(
-        rec["Has Sig Price Evidence"],
-        rec["Clicks"] * rec["Lift Proxy %"],
-        0.0,
-    )
-    target_win_rate = rec["Strategy Bucket"].map(
-        {
-            "Strongest Momentum": 0.35,
-            "Moderate Momentum": 0.30,
-            "Minimal Growth": 0.24,
-            "LTV Constrained": 0.20,
-            "Closure Constrained": 0.20,
-            "Inactive/Low Spend": 0.15,
-        }
-    ).fillna(0.22)
     fallback_win_rate = pd.Series(np.where(rec["Bids"] > 0, rec["Clicks"] / rec["Bids"], 0), index=rec.index)
     current_win_rate = rec["Bids to Clicks"].combine_first(fallback_win_rate)
-    win_rate_headroom = np.maximum(target_win_rate - current_win_rate, 0)
-    adj_intensity = np.clip(rec["Applied Price Adjustment %"].fillna(0) / 10.0, 0, 2.0)
-    rec["Model-based Additional Clicks"] = rec["Bids"].fillna(0) * win_rate_headroom * adj_intensity
-    rec["Expected Additional Clicks"] = np.maximum(
-        rec["Test-based Additional Clicks"].fillna(0),
-        rec["Model-based Additional Clicks"].fillna(0),
+    rec["Test-based Additional Clicks"] = np.where(
+        rec["Has Sig Price Evidence"],
+        rec["Bids"].fillna(0) * current_win_rate.fillna(0) * rec["Win Rate Lift %"].clip(lower=0),
+        0.0,
     )
+    rec["Model-based Additional Clicks"] = 0.0
+    rec["Expected Additional Clicks"] = rec["Test-based Additional Clicks"].fillna(0)
     # After merges, channel-level and seg-level bind rates may coexist; use seg rate when reliable.
     channel_bind_rate = rec.get("Clicks to Binds")
     if channel_bind_rate is None:
@@ -924,7 +907,7 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
         "Scenario Win Rate Lift %",
         "Scenario CPC Lift %",
     ]] = mapped
-    out["Scenario Lift Proxy %"] = np.maximum(out["Scenario Clicks Lift %"], out["Scenario Win Rate Lift %"])
+    out["Scenario Lift Proxy %"] = out["Scenario Win Rate Lift %"]
     return out
 
 
@@ -1594,7 +1577,18 @@ def main() -> None:
                         )
                         state_channels = apply_scenario_effects(state_channels, price_eval, "Scenario Target Adj %", settings)
                         state_channels["Scenario Lift Proxy %"] = state_channels["Scenario Lift Proxy %"].clip(lower=0)
-                        state_channels["Expected Additional Clicks"] = state_channels["Clicks"] * state_channels["Scenario Lift Proxy %"]
+                        state_wr = state_channels["Bids to Clicks"].fillna(
+                            np.where(
+                                state_channels["Bids"] > 0,
+                                state_channels["Clicks"] / state_channels["Bids"],
+                                0,
+                            )
+                        )
+                        state_channels["Expected Additional Clicks"] = (
+                            state_channels["Bids"].fillna(0)
+                            * state_wr.fillna(0)
+                            * state_channels["Scenario Lift Proxy %"]
+                        )
                         state_channels["Expected Additional Binds"] = (
                             state_channels["Expected Additional Clicks"] * state_channels["Clicks to Binds Proxy"].fillna(0)
                         )
@@ -1709,8 +1703,8 @@ def main() -> None:
         scen["Scenario Target Adj %"] = np.minimum(scen["Scenario Target Adj %"], scen["Strategy Max Adj %"])
         scen = apply_scenario_effects(scen, price_eval, "Scenario Target Adj %", settings)
         scen["Scenario Lift Proxy %"] = scen["Scenario Lift Proxy %"].clip(lower=0)
-
-        scen["Additional Clicks (scenario)"] = scen["Clicks"] * scen["Scenario Lift Proxy %"]
+        scen_wr = scen["Bids to Clicks"].fillna(np.where(scen["Bids"] > 0, scen["Clicks"] / scen["Bids"], 0))
+        scen["Additional Clicks (scenario)"] = scen["Bids"].fillna(0) * scen_wr.fillna(0) * scen["Scenario Lift Proxy %"]
         scen["Additional Binds (scenario)"] = scen["Additional Clicks (scenario)"] * scen["Clicks to Binds Proxy"].fillna(0)
         if "Total Click Cost" in scen.columns:
             scen["Current Cost"] = scen["Total Click Cost"].fillna(scen["Clicks"] * scen["Avg. CPC"])
