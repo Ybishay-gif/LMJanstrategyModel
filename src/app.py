@@ -323,26 +323,121 @@ def strategy_max_adjustment(bucket: str, settings: Settings) -> float:
     return settings.max_adj_minimal
 
 
-def apply_price_effects(
-    rec: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings
-) -> pd.DataFrame:
+def _build_effect_dicts(price_eval_df: pd.DataFrame, settings: Settings) -> tuple[dict, dict]:
     px = price_eval_df.copy()
     if "Stat Sig Price Point" in px.columns:
         px = px[px["Stat Sig Price Point"] == True]
     if "CPC Lift %" in px.columns:
         px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
-    effects = (
+
+    state_dict: dict[tuple[str, str], pd.DataFrame] = {}
+    if "State" in px.columns:
+        st_eff = (
+            px[["State", "Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
+            .groupby(["State", "Channel Groups", "Price Adjustment Percent"], as_index=False)
+            .mean(numeric_only=True)
+        )
+        state_dict = {
+            (str(st), str(ch)): g.sort_values("Price Adjustment Percent")
+            for (st, ch), g in st_eff.groupby(["State", "Channel Groups"])
+        }
+
+    ch_eff = (
         px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
         .mean(numeric_only=True)
     )
-    effect_dict: dict[str, pd.DataFrame] = {
-        ch: g.sort_values("Price Adjustment Percent")
-        for ch, g in effects.groupby("Channel Groups")
+    channel_dict: dict[str, pd.DataFrame] = {
+        str(ch): g.sort_values("Price Adjustment Percent") for ch, g in ch_eff.groupby("Channel Groups")
     }
+    return state_dict, channel_dict
+
+
+def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    px = price_eval_df.copy()
+    if "Stat Sig Price Point" in px.columns:
+        px = px[px["Stat Sig Price Point"] == True]
+    if "CPC Lift %" in px.columns:
+        px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
+    px = px[(px["Price Adjustment Percent"].fillna(0) >= 0) & (px["Win Rate Lift %"].fillna(0) >= 0)]
+
+    state_best: dict[tuple[str, str], pd.Series] = {}
+    if "State" in px.columns:
+        st_best = (
+            px.sort_values(["Win Rate Lift %", "Growth Opportunity Score"], ascending=False)
+            .groupby(["State", "Channel Groups"], as_index=False)
+            .first()
+        )
+        state_best = {
+            (str(r["State"]), str(r["Channel Groups"])): r
+            for _, r in st_best.iterrows()
+        }
+
+    ch_best_df = (
+        px.sort_values(["Win Rate Lift %", "Growth Opportunity Score"], ascending=False)
+        .groupby("Channel Groups", as_index=False)
+        .first()
+    )
+    ch_best = {str(r["Channel Groups"]): r for _, r in ch_best_df.iterrows()}
+
+    def _lookup(row: pd.Series) -> pd.Series:
+        key_sc = (str(row.get("State", "")), str(row.get("Channel Groups", "")))
+        srow = state_best.get(key_sc)
+        if srow is not None:
+            return pd.Series(
+                [
+                    srow.get("Price Adjustment Percent", 0.0),
+                    srow.get("Growth Opportunity Score", 0.0),
+                    srow.get("Clicks Lift %", 0.0),
+                    srow.get("CPC Lift %", 0.0),
+                    srow.get("Win Rate Lift %", 0.0),
+                    True,
+                ]
+            )
+        crow = ch_best.get(str(row.get("Channel Groups", "")))
+        if crow is not None:
+            return pd.Series(
+                [
+                    crow.get("Price Adjustment Percent", 0.0),
+                    crow.get("Growth Opportunity Score", 0.0),
+                    crow.get("Clicks Lift %", 0.0),
+                    crow.get("CPC Lift %", 0.0),
+                    crow.get("Win Rate Lift %", 0.0),
+                    True,
+                ]
+            )
+        return pd.Series([0.0, 0.0, 0.0, 0.0, 0.0, False])
+
+    out = rec.copy()
+    mapped = out.apply(_lookup, axis=1)
+    mapped.columns = [
+        "Price Adjustment Percent",
+        "Growth Opportunity Score",
+        "Clicks Lift %",
+        "CPC Lift %",
+        "Win Rate Lift %",
+        "Has Sig Price Evidence",
+    ]
+    out[[
+        "Price Adjustment Percent",
+        "Growth Opportunity Score",
+        "Clicks Lift %",
+        "CPC Lift %",
+        "Win Rate Lift %",
+        "Has Sig Price Evidence",
+    ]] = mapped
+    return out
+
+
+def apply_price_effects(
+    rec: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings
+) -> pd.DataFrame:
+    state_dict, effect_dict = _build_effect_dicts(price_eval_df, settings)
 
     def lookup(row: pd.Series) -> pd.Series:
-        g = effect_dict.get(row["Channel Groups"])
+        g = state_dict.get((str(row.get("State", "")), str(row["Channel Groups"])))
+        if g is None or g.empty:
+            g = effect_dict.get(str(row["Channel Groups"]))
         if g is None or g.empty:
             return pd.Series([0.0, 0.0, 0.0, 0.0])
         target = row["Suggested Price Adjustment %"]
@@ -516,8 +611,12 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
         & (df["Clicks"].fillna(0) >= settings.min_clicks_price_sig)
     )
 
+    key_cols = ["Channel Groups"]
+    if "State" in df.columns:
+        key_cols = ["State", "Channel Groups"]
+
     base = df[df["Price Adjustment Percent"] == 0][
-        ["Channel Groups", "Clicks", "Avg. CPC", "Win Rate", "SOV", "Test Point Stat Sig"]
+        key_cols + ["Clicks", "Avg. CPC", "Win Rate", "SOV", "Test Point Stat Sig"]
     ].rename(
         columns={
             "Clicks": "Baseline Clicks",
@@ -528,7 +627,7 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
         }
     )
 
-    out = df.merge(base, on="Channel Groups", how="left")
+    out = df.merge(base, on=key_cols, how="left")
     out["Stat Sig Price Point"] = out["Test Point Stat Sig"].fillna(False) & out["Baseline Stat Sig"].fillna(False)
     out["Clicks Lift %"] = np.where(
         (out["Baseline Clicks"] > 0) & out["Stat Sig Price Point"],
@@ -621,8 +720,7 @@ def build_model_tables(
 
     rec = channel_state_df.merge(st_ref, on="State", how="left").merge(seg_ref, on=["State", "Segment"], how="left")
     rec = rec.merge(best_adj_df, on="Channel Groups", how="left")
-    if "Has Sig Price Evidence" not in rec.columns:
-        rec["Has Sig Price Evidence"] = False
+    rec = _assign_best_price_points(rec, price_eval_df, settings)
     rec["Has Sig Price Evidence"] = rec["Has Sig Price Evidence"].fillna(False)
 
     rec["Use Seg Perf"] = rec["Bids"] >= settings.min_bids_channel_state
@@ -906,20 +1004,12 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
 
 
 def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str, settings: Settings) -> pd.DataFrame:
-    px = price_eval_df.copy()
-    if "Stat Sig Price Point" in px.columns:
-        px = px[px["Stat Sig Price Point"] == True]
-    if "CPC Lift %" in px.columns:
-        px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
-    effects = (
-        px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
-        .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
-        .mean(numeric_only=True)
-    )
-    effect_dict = {ch: g.sort_values("Price Adjustment Percent") for ch, g in effects.groupby("Channel Groups")}
+    state_dict, effect_dict = _build_effect_dicts(price_eval_df, settings)
 
     def lookup(row: pd.Series) -> pd.Series:
-        g = effect_dict.get(row["Channel Groups"])
+        g = state_dict.get((str(row.get("State", "")), str(row["Channel Groups"])))
+        if g is None or g.empty:
+            g = effect_dict.get(str(row["Channel Groups"]))
         if g is None or g.empty:
             return pd.Series([0.0, 0.0, 0.0, 0.0])
         target = row[adjustment_col]
