@@ -2451,34 +2451,106 @@ def main() -> None:
                         selected_groups: list[str] = []
                         edited = grid_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
-                        all_adj_options = sorted({x for xs in edited["Adj Options"].tolist() for x in (xs if isinstance(xs, list) else [])})
-                        edited = st.data_editor(
-                            edited,
-                            use_container_width=True,
-                            hide_index=True,
-                            key=f"tab1_apply_editor_{selected_state}",
-                            column_config={
-                                "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
-                                "Select": st.column_config.CheckboxColumn("Select"),
-                                "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
-                                "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
-                                "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
-                                "Binds": st.column_config.NumberColumn("Binds", format="%.2f", disabled=True),
-                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.2f%%", disabled=True),
-                                "Total Cost": st.column_config.NumberColumn("Total Cost", format="dollar", disabled=True),
-                                "Rec Bid Adj": st.column_config.NumberColumn("Rec. Bid Adj.", format="%+.0f%%", disabled=True),
-                                "Adj Selection": st.column_config.SelectboxColumn("Adj Selection", options=all_adj_options),
-                                "Selected Price Adj": st.column_config.NumberColumn("Selected Price Adj.", format="%+.0f%%", disabled=True),
-                                "Expected Total Cost": st.column_config.NumberColumn("Expected Total Cost", format="dollar", disabled=True),
-                                "Additional Budget Needed": st.column_config.NumberColumn("Adjusted Budget", format="dollar", disabled=True),
-                                "Expected Additional Clicks": st.column_config.NumberColumn("Expected Additional Clicks", format="localized", disabled=True),
-                                "Expected Additional Binds": st.column_config.NumberColumn("Expected Additional Binds", format="%.2f", disabled=True),
-                                "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
-                                "Apply": st.column_config.CheckboxColumn("Apply"),
-                                "Selection Source": st.column_config.TextColumn("Selection Source", disabled=True),
-                                "Adj Options": None,
-                            },
-                        )
+                        if AGGRID_AVAILABLE:
+                            dropdown_label_renderer = JsCode(
+                                """
+                                class DropLabelRenderer {
+                                  init(params) {
+                                    this.eGui = document.createElement('span');
+                                    const v = params.value || '';
+                                    this.eGui.innerText = v ? ('▼ ' + v) : '▼ Select adjustment';
+                                  }
+                                  getGui() { return this.eGui; }
+                                }
+                                """
+                            )
+                            gb = GridOptionsBuilder.from_dataframe(edited)
+                            gb.configure_default_column(resizable=True, sortable=True, filter=True)
+                            gb.configure_grid_options(singleClickEdit=True, stopEditingWhenCellsLoseFocus=True)
+                            gb.configure_selection("multiple", use_checkbox=True)
+                            gb.configure_column("Channel Groups", editable=False, pinned="left", width=180)
+                            gb.configure_column("Select", editable=True, width=64)
+                            gb.configure_column("Bids", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
+                            gb.configure_column("SOV", editable=False, width=76, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
+                            gb.configure_column("Clicks", editable=False, width=84, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
+                            gb.configure_column("Binds", editable=False, width=84, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
+                            gb.configure_column("Win Rate", editable=False, width=94, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
+                            gb.configure_column("Total Cost", editable=False, width=110, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Rec Bid Adj", headerName="Rec. Bid Adj.", editable=False, width=102, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column(
+                                "Adj Selection",
+                                headerName="Adj Selection ▼",
+                                editable=True,
+                                width=350,
+                                cellRenderer=dropdown_label_renderer,
+                                cellEditor="agRichSelectCellEditor",
+                                cellEditorParams=JsCode(
+                                    """
+                                    function(params) {
+                                      return { values: params.data && params.data['Adj Options'] ? params.data['Adj Options'] : [] };
+                                    }
+                                    """
+                                ),
+                            )
+                            gb.configure_column("Selected Price Adj", headerName="Selected Price Adj.", editable=False, width=138, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Expected Total Cost", editable=False, width=128, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=118, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="(value == null || isNaN(Number(value))) ? '0' : Math.round(Number(value)).toLocaleString()")
+                            gb.configure_column("Expected Additional Binds", editable=False, width=124, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
+                            gb.configure_column("CPC Lift %", editable=False, width=88, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
+                            gb.configure_column("Apply", editable=True, width=70)
+                            gb.configure_column("Selection Source", editable=False, width=108)
+                            gb.configure_column("Adj Options", hide=True)
+                            go = gb.build()
+                            grid = AgGrid(
+                                edited,
+                                gridOptions=go,
+                                allow_unsafe_jscode=True,
+                                update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+                                fit_columns_on_grid_load=True,
+                                reload_data=True,
+                                height=460,
+                                theme="balham-dark" if dark_mode else "balham",
+                                key=f"tab1_aggrid_{selected_state}",
+                            )
+                            edited = pd.DataFrame(grid["data"])
+                            st.session_state[draft_key] = edited
+                            selected_rows = grid.get("selected_rows", [])
+                            if isinstance(selected_rows, list) and selected_rows:
+                                selected_groups = [str(r.get("Channel Groups")) for r in selected_rows if r.get("Channel Groups") is not None]
+                        else:
+                            all_adj_options = sorted({x for xs in edited["Adj Options"].tolist() for x in (xs if isinstance(xs, list) else [])})
+                            edited = st.data_editor(
+                                edited,
+                                use_container_width=True,
+                                hide_index=True,
+                                key=f"tab1_apply_editor_{selected_state}",
+                                column_config={
+                                    "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
+                                    "Select": st.column_config.CheckboxColumn("Select"),
+                                    "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
+                                    "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
+                                    "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
+                                    "Binds": st.column_config.NumberColumn("Binds", format="%.2f", disabled=True),
+                                    "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.2f%%", disabled=True),
+                                    "Total Cost": st.column_config.NumberColumn("Total Cost", format="dollar", disabled=True),
+                                    "Rec Bid Adj": st.column_config.NumberColumn("Rec. Bid Adj.", format="%+.0f%%", disabled=True),
+                                    "Adj Selection": st.column_config.SelectboxColumn("Adj Selection", options=all_adj_options),
+                                    "Selected Price Adj": st.column_config.NumberColumn("Selected Price Adj.", format="%+.0f%%", disabled=True),
+                                    "Expected Total Cost": st.column_config.NumberColumn("Expected Total Cost", format="dollar", disabled=True),
+                                    "Additional Budget Needed": st.column_config.NumberColumn("Adjusted Budget", format="dollar", disabled=True),
+                                    "Expected Additional Clicks": st.column_config.NumberColumn("Expected Additional Clicks", format="localized", disabled=True),
+                                    "Expected Additional Binds": st.column_config.NumberColumn("Expected Additional Binds", format="%.2f", disabled=True),
+                                    "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
+                                    "Apply": st.column_config.CheckboxColumn("Apply"),
+                                    "Selection Source": st.column_config.TextColumn("Selection Source", disabled=True),
+                                    "Adj Options": None,
+                                },
+                            )
+                            st.session_state[draft_key] = edited
+                            selected_rows = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
+                            if not selected_rows.empty:
+                                selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
                         # Stage dropdown selections in rows (apply on Save).
                         for i, rr in edited.iterrows():
                             adj = parse_adj_from_label(rr.get("Adj Selection", ""))
