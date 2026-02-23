@@ -2285,13 +2285,14 @@ def main() -> None:
 
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
                             Bids=("Bids", "sum"),
+                            Binds=("Binds", "sum"),
                             SOV=("SOV", "mean"),
                             Clicks=("Clicks", "sum"),
                             **{"Win Rate": ("Bids to Clicks", "mean")},
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
                             **{"Additional Budget Needed": ("Additional Budget Needed", "sum")},
-                            **{"Recommended Bid Adjustment": ("Scenario Bid Adjustment %", "median")},
+                            **{"Rec. Bid Adj.": ("Scenario Bid Adjustment %", "median")},
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
                             **{"CPC Lift %": ("Scenario CPC Lift %", "mean")},
@@ -2303,36 +2304,50 @@ def main() -> None:
                         )
                         cg_state_cols = [
                             "Channel Groups",
+                            "Binds",
                             "Bids",
                             "SOV",
                             "Clicks",
-                            "Recommended Bid Adjustment",
+                            "Rec. Bid Adj.",
                             "Win Rate",
                             "Total Cost",
                             "Expected Total Cost",
                             "Additional Budget Needed",
-                            "Total Cost Impact %",
                             "Expected Additional Clicks",
                             "Expected Additional Binds",
                             "CPC Lift %",
                         ]
                         table_df = cg_state[cg_state_cols].copy()
-                        table_df["Selected Bid Adjustment"] = table_df["Recommended Bid Adjustment"]
+                        table_df["Selected Bid Adj."] = table_df["Rec. Bid Adj."]
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
-                        table_df["Open 🔎"] = "🔎"
                         table_df["Open Popup"] = False
                         for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
                             if isinstance(ov, dict) and ov.get("apply", False):
                                 table_df.at[idx, "Apply"] = True
-                                table_df.at[idx, "Selected Bid Adjustment"] = float(ov.get("adj", rr["Recommended Bid Adjustment"]))
+                                table_df.at[idx, "Selected Bid Adj."] = float(ov.get("adj", rr["Rec. Bid Adj."]))
                                 table_df.at[idx, "Selection Source"] = "Manual"
-
-                        # Display percentages as points (e.g., 12 means 12%).
-                        table_df["CPC Lift %"] = table_df["CPC Lift %"].fillna(0) * 100.0
-                        table_df["Total Cost Impact %"] = table_df["Total Cost Impact %"].fillna(0) * 100.0
+                        table_df = table_df[
+                            [
+                                "Channel Groups",
+                                "Binds",
+                                "SOV",
+                                "Clicks",
+                                "Rec. Bid Adj.",
+                                "Win Rate",
+                                "Total Cost",
+                                "Expected Total Cost",
+                                "Additional Budget Needed",
+                                "Expected Additional Binds",
+                                "CPC Lift %",
+                                "Apply",
+                                "Selection Source",
+                                "Selected Bid Adj.",
+                                "Open Popup",
+                            ]
+                        ]
 
                         selected_groups: list[str] = []
                         edited = table_df.copy()
@@ -2348,18 +2363,26 @@ def main() -> None:
                                 class OpenBtnRenderer {
                                   init(params) {
                                     this.params = params;
-                                    this.eGui = document.createElement('button');
-                                    this.eGui.innerText = '🔎';
-                                    this.eGui.style.cursor = 'pointer';
-                                    this.eGui.style.border = '1px solid #334155';
-                                    this.eGui.style.borderRadius = '8px';
-                                    this.eGui.style.padding = '2px 8px';
-                                    this.eGui.style.background = '#0f172a';
-                                    this.eGui.style.color = '#e2e8f0';
-                                    this.eGui.addEventListener('click', (e) => {
+                                    this.eGui = document.createElement('div');
+                                    this.eGui.style.display = 'flex';
+                                    this.eGui.style.alignItems = 'center';
+                                    this.eGui.style.gap = '8px';
+                                    const btn = document.createElement('button');
+                                    btn.innerText = '🔎';
+                                    btn.style.cursor = 'pointer';
+                                    btn.style.border = '1px solid #334155';
+                                    btn.style.borderRadius = '8px';
+                                    btn.style.padding = '1px 6px';
+                                    btn.style.background = '#0f172a';
+                                    btn.style.color = '#e2e8f0';
+                                    btn.addEventListener('click', (e) => {
                                       e.stopPropagation();
                                       params.node.setDataValue('Open Popup', true);
                                     });
+                                    const txt = document.createElement('span');
+                                    txt.innerText = params.value || '';
+                                    this.eGui.appendChild(btn);
+                                    this.eGui.appendChild(txt);
                                   }
                                   getGui() { return this.eGui; }
                                 }
@@ -2368,13 +2391,29 @@ def main() -> None:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_selection("multiple", use_checkbox=True)
-                            gb.configure_column("Channel Groups", editable=False, pinned="left")
-                            gb.configure_column("Open 🔎", headerName="Explore", cellRenderer=button_renderer, editable=False, width=95)
+                            gb.configure_column("Channel Groups", editable=False, pinned="left", cellRenderer=button_renderer, width=190)
                             gb.configure_column("Open Popup", hide=True)
-                            gb.configure_column("Selected Bid Adjustment", editable=True)
-                            gb.configure_column("Apply", editable=True)
-                            gb.configure_column("Selection Source", editable=False)
+                            gb.configure_column("Binds", editable=False, width=88, type=["numericColumn"])
+                            gb.configure_column("SOV", editable=False, width=80, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
+                            gb.configure_column("Clicks", editable=False, width=88, type=["numericColumn"])
+                            gb.configure_column("Rec. Bid Adj.", editable=False, width=104, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Selected Bid Adj.", hide=True)
+                            gb.configure_column("Win Rate", editable=False, width=96, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
+                            gb.configure_column("Total Cost", editable=False, width=112, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Expected Total Cost", editable=False, width=136, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Expected Additional Binds", editable=False, width=136, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
+                            gb.configure_column("CPC Lift %", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
+                            gb.configure_column("Apply", editable=True, width=82)
+                            gb.configure_column("Selection Source", editable=False, width=118)
                             go = gb.build()
+                            custom_css = {
+                                ".ag-root-wrapper": {"background-color": "#0b1220", "border": "1px solid #1f2937", "border-radius": "10px"},
+                                ".ag-header": {"background-color": "#0f172a !important", "color": "#cbd5e1"},
+                                ".ag-row": {"background-color": "#0b1220", "color": "#e2e8f0"},
+                                ".ag-row-hover": {"background-color": "#111827 !important"},
+                                ".ag-cell": {"border-color": "#1f2937"},
+                            }
                             grid = AgGrid(
                                 edited,
                                 gridOptions=go,
@@ -2383,6 +2422,7 @@ def main() -> None:
                                 fit_columns_on_grid_load=False,
                                 height=420,
                                 theme="balham-dark" if dark_mode else "balham",
+                                custom_css=custom_css,
                                 key=f"tab1_aggrid_{selected_state}",
                             )
                             edited = pd.DataFrame(grid["data"])
@@ -2423,7 +2463,7 @@ def main() -> None:
                         if do_apply_bulk and selected_groups:
                             for cg in selected_groups:
                                 m = edited["Channel Groups"] == cg
-                                edited.loc[m, "Selected Bid Adjustment"] = float(bulk_adj)
+                                edited.loc[m, "Selected Bid Adj."] = float(bulk_adj)
                                 edited.loc[m, "Apply"] = True
                                 edited.loc[m, "Selection Source"] = "Manual"
                             st.session_state[draft_key] = edited
@@ -2440,7 +2480,7 @@ def main() -> None:
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
                                 if bool(rr.get("Apply", False)):
-                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Bid Adjustment", 0.0))}
+                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Bid Adj.", 0.0))}
                                 else:
                                     new_overrides.pop(okey, None)
                             st.session_state["bid_overrides"] = new_overrides
