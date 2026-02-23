@@ -183,6 +183,40 @@ class Settings:
     min_bids_price_sig: int
     min_clicks_price_sig: int
     min_binds_perf_sig: int
+    optimization_mode: str
+
+
+OPTIMIZATION_MODES = [
+    "Max Growth",
+    "Growth Leaning",
+    "Balanced",
+    "Cost Leaning",
+    "Optimize Cost",
+]
+
+
+def mode_factor(mode: str) -> float:
+    m = {
+        "Max Growth": 1.0,
+        "Growth Leaning": 0.75,
+        "Balanced": 0.5,
+        "Cost Leaning": 0.25,
+        "Optimize Cost": 0.0,
+    }
+    return m.get(mode, 0.5)
+
+
+def effective_cpc_cap_pct(settings: Settings) -> float:
+    # Cost mode keeps a tight cap; growth mode allows wider CPC expansion.
+    f = mode_factor(settings.optimization_mode)
+    return 12.0 + (45.0 - 12.0) * f
+
+
+def effective_cpc_penalty(settings: Settings) -> float:
+    # Cost mode penalizes CPC harder; growth mode softens the penalty.
+    f = mode_factor(settings.optimization_mode)
+    mult = 1.6 - 1.25 * f  # 1.6 -> 0.35
+    return settings.cpc_penalty_weight * mult
 
 
 def classify_perf_group(roe: float, combined_ratio: float, performance: float, binds: float, min_binds_sig: int) -> tuple[str, bool]:
@@ -296,7 +330,7 @@ def apply_price_effects(
     if "Stat Sig Price Point" in px.columns:
         px = px[px["Stat Sig Price Point"] == True]
     if "CPC Lift %" in px.columns:
-        px = px[px["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0]
+        px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
     effects = (
         px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
@@ -515,12 +549,12 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
     out["Growth Opportunity Score"] = (
         0.70 * out["Win Rate Lift %"].fillna(0)
         + 0.30 * (1 - out["Baseline SOV"].fillna(0.5))
-        - settings.cpc_penalty_weight * np.maximum(out["CPC Lift %"].fillna(0), 0)
+        - effective_cpc_penalty(settings) * np.maximum(out["CPC Lift %"].fillna(0), 0)
     )
 
     feasible = out[
         (out["Stat Sig Price Point"] == True)
-        & (out["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0)
+        & (out["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0)
         & (out["Price Adjustment Percent"].fillna(0) >= 0)
         & (out["Win Rate Lift %"].fillna(0) >= 0)
     ].copy()
@@ -876,7 +910,7 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
     if "Stat Sig Price Point" in px.columns:
         px = px[px["Stat Sig Price Point"] == True]
     if "CPC Lift %" in px.columns:
-        px = px[px["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0]
+        px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
     effects = (
         px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
@@ -1233,6 +1267,12 @@ def main() -> None:
         max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 40, 25, 1)
         min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
+        optimization_mode = st.select_slider(
+            "Growth vs Cost Optimization",
+            options=OPTIMIZATION_MODES,
+            value="Balanced",
+            help="Max Growth favors higher win-rate tests with wider CPC tolerance. Optimize Cost tightens CPC controls.",
+        )
         min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.65, 0.01)
         roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
@@ -1274,6 +1314,11 @@ def main() -> None:
             min_bids_price_sig=min_bids_price_sig,
             min_clicks_price_sig=min_clicks_price_sig,
             min_binds_perf_sig=min_binds_perf_sig,
+            optimization_mode=optimization_mode,
+        )
+        st.caption(
+            f"Effective CPC cap: {effective_cpc_cap_pct(settings):.0f}% | "
+            f"Effective CPC penalty: {effective_cpc_penalty(settings):.2f}"
         )
         run = st.button("Refresh", type="primary")
 
