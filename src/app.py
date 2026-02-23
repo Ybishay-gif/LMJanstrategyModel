@@ -2572,27 +2572,13 @@ def main() -> None:
                                 key=f"tab1_aggrid_{selected_state}",
                             )
                             edited = pd.DataFrame(grid["data"])
-                            # Apply per-row dropdown selections immediately to manual overrides.
-                            changed = False
-                            new_overrides = dict(st.session_state.get("bid_overrides", {}))
-                            for _, rr in edited.iterrows():
-                                ch = str(rr.get("Channel Groups", ""))
-                                lbl = rr.get("Adj Selection", "")
-                                adj = parse_adj_from_label(lbl)
-                                if adj is None:
-                                    continue
-                                cur = float(rr.get("Selected Price Adj", 0) or 0)
-                                if abs(adj - cur) > 1e-9:
-                                    rr_m = edited["Channel Groups"] == ch
-                                    edited.loc[rr_m, "Selected Price Adj"] = float(adj)
-                                    edited.loc[rr_m, "Apply"] = True
-                                    edited.loc[rr_m, "Selection Source"] = "Manual"
-                                    new_overrides[f"{selected_state}|{ch}"] = {"apply": True, "adj": float(adj)}
-                                    changed = True
-                            if changed:
-                                st.session_state["bid_overrides"] = new_overrides
-                                st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
-                                st.rerun()
+                            # Stage dropdown selections in the row, but apply to model only on Save Edits.
+                            for i, rr in edited.iterrows():
+                                adj = parse_adj_from_label(rr.get("Adj Selection", ""))
+                                if adj is not None:
+                                    edited.at[i, "Selected Price Adj"] = float(adj)
+                                    edited.at[i, "Selection Source"] = "Manual"
+                                    edited.at[i, "Apply"] = True
                             st.session_state[draft_key] = edited
                             selected_rows = grid.get("selected_rows", [])
                             if isinstance(selected_rows, list) and selected_rows:
@@ -2646,11 +2632,15 @@ def main() -> None:
                             new_overrides = dict(st.session_state["bid_overrides"])
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
-                                if bool(rr.get("Apply", False)):
+                                adj_from_dropdown = parse_adj_from_label(rr.get("Adj Selection", ""))
+                                if adj_from_dropdown is not None:
+                                    new_overrides[okey] = {"apply": True, "adj": float(adj_from_dropdown)}
+                                elif bool(rr.get("Apply", False)):
                                     new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj", 0.0))}
                                 else:
                                     new_overrides.pop(okey, None)
                             st.session_state["bid_overrides"] = new_overrides
+                            st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                             st.rerun()
 
                         st.caption("Click the row `🔎` button to open popup. Use Save once for multiple row updates.")
