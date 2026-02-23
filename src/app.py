@@ -209,9 +209,11 @@ def mode_factor(mode: str) -> float:
 
 
 def effective_cpc_cap_pct(settings: Settings) -> float:
-    # Cost mode keeps a tight cap; growth mode allows wider CPC expansion.
+    # Cost mode keeps a tight cap; growth mode allows wider CPC expansion,
+    # but never above the explicit guardrail slider.
     f = mode_factor(settings.optimization_mode)
-    return 12.0 + (45.0 - 12.0) * f
+    mode_cap = 12.0 + (45.0 - 12.0) * f
+    return min(float(settings.max_cpc_increase_pct), mode_cap)
 
 
 def effective_cpc_penalty(settings: Settings) -> float:
