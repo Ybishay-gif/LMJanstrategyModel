@@ -2649,7 +2649,8 @@ def main() -> None:
                         if not selected_rows.empty:
                             selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
 
-                        a1, a2, a3, a4 = st.columns([1.2, 1, 1, 1])
+                        a0, a1, a2, a3, a4, a5 = st.columns([1, 1.2, 1, 1, 1, 1.2])
+                        do_select_all = a0.button("Select All Rows", key=f"tab1_select_all_{selected_state}")
                         bulk_adj = a1.number_input(
                             "Set selected to bid adj %",
                             min_value=-10.0,
@@ -2661,6 +2662,12 @@ def main() -> None:
                         do_apply_bulk = a2.button("Apply Selected", key=f"tab1_apply_selected_{selected_state}")
                         do_revert_bulk = a3.button("Revert Selected", key=f"tab1_revert_selected_{selected_state}")
                         do_save = a4.button("Save Edits", key=f"tab1_save_edits_{selected_state}")
+                        do_revert_all = a5.button("Revert All To Rec", key=f"tab1_revert_all_{selected_state}")
+
+                        if do_select_all:
+                            edited["Select"] = True
+                            st.session_state[draft_key] = edited
+                            st.rerun()
 
                         if do_apply_bulk and selected_groups:
                             for cg in selected_groups:
@@ -2673,8 +2680,31 @@ def main() -> None:
                         if do_revert_bulk and selected_groups:
                             for cg in selected_groups:
                                 m = edited["Channel Groups"] == cg
+                                rec_adj = pd.to_numeric(edited.loc[m, "Rec Bid Adj"], errors="coerce").fillna(0.0)
+                                edited.loc[m, "Selected Price Adj"] = rec_adj.values
+                                if "Adj Selection" in edited.columns and "Adj Options" in edited.columns:
+                                    for idx in edited[m].index:
+                                        opts = edited.at[idx, "Adj Options"] if "Adj Options" in edited.columns else []
+                                        recv = float(pd.to_numeric(pd.Series([edited.at[idx, "Rec Bid Adj"]]), errors="coerce").fillna(0.0).iloc[0])
+                                        if isinstance(opts, list) and opts:
+                                            picked = next((lb for lb in opts if parse_adj_from_label(lb) == recv), opts[0])
+                                            edited.at[idx, "Adj Selection"] = picked
                                 edited.loc[m, "Apply"] = False
                                 edited.loc[m, "Selection Source"] = "Suggested"
+                            st.session_state[draft_key] = edited
+                            st.rerun()
+                        if do_revert_all:
+                            edited["Select"] = False
+                            edited["Apply"] = False
+                            edited["Selection Source"] = "Suggested"
+                            edited["Selected Price Adj"] = pd.to_numeric(edited["Rec Bid Adj"], errors="coerce").fillna(0.0)
+                            if "Adj Selection" in edited.columns and "Adj Options" in edited.columns:
+                                for idx in edited.index:
+                                    opts = edited.at[idx, "Adj Options"]
+                                    recv = float(pd.to_numeric(pd.Series([edited.at[idx, "Rec Bid Adj"]]), errors="coerce").fillna(0.0).iloc[0])
+                                    if isinstance(opts, list) and opts:
+                                        picked = next((lb for lb in opts if parse_adj_from_label(lb) == recv), opts[0])
+                                        edited.at[idx, "Adj Selection"] = picked
                             st.session_state[draft_key] = edited
                             st.rerun()
                         if do_save:
