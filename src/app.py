@@ -2321,6 +2321,7 @@ def main() -> None:
                         table_df["Selected Bid Adj."] = table_df["Rec. Bid Adj."]
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
+                        table_df["Explore"] = ""
                         table_df["Open Popup"] = False
                         for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
@@ -2336,6 +2337,7 @@ def main() -> None:
                                 "SOV",
                                 "Clicks",
                                 "Rec. Bid Adj.",
+                                "Explore",
                                 "Win Rate",
                                 "Total Cost",
                                 "Expected Total Cost",
@@ -2391,12 +2393,13 @@ def main() -> None:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_selection("multiple", use_checkbox=True)
-                            gb.configure_column("Channel Groups", editable=False, pinned="left", cellRenderer=button_renderer, width=190)
+                            gb.configure_column("Channel Groups", editable=False, pinned="left", width=190)
                             gb.configure_column("Open Popup", hide=True)
                             gb.configure_column("Binds", editable=False, width=88, type=["numericColumn"])
                             gb.configure_column("SOV", editable=False, width=80, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Clicks", editable=False, width=88, type=["numericColumn"])
                             gb.configure_column("Rec. Bid Adj.", editable=False, width=104, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=78)
                             gb.configure_column("Selected Bid Adj.", hide=True)
                             gb.configure_column("Win Rate", editable=False, width=96, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
                             gb.configure_column("Total Cost", editable=False, width=112, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
