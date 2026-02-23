@@ -921,7 +921,7 @@ def simulate_mode_by_strategy(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame,
         part = base[base["Strategy Mode"] == mode].copy()
         if part.empty:
             continue
-        mode_settings = replace(settings, optimization_mode=mode)
+        mode_settings = Settings(**{**settings.__dict__, "optimization_mode": mode})
         part["Scenario Target Adj %"] = part["Applied Price Adjustment %"]
         part["Scenario Target Adj %"] = np.minimum(part["Scenario Target Adj %"], part["Strategy Max Adj %"])
         part = apply_scenario_effects(part, price_eval_df, "Scenario Target Adj %", mode_settings)
