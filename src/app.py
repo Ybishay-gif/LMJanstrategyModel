@@ -1,6 +1,5 @@
 import re
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -1378,6 +1377,20 @@ def parse_adj_from_label(label: str) -> Optional[float]:
         return None
 
 
+def to_bool(v) -> bool:
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    if isinstance(v, (int, float)) and not pd.isna(v):
+        return bool(v)
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in {"true", "1", "yes", "y", "on"}:
+            return True
+        if s in {"false", "0", "no", "n", "off", ""}:
+            return False
+    return False
+
+
 def load_overrides_from_disk() -> dict:
     try:
         if not OVERRIDES_PATH.exists():
@@ -2591,7 +2604,7 @@ def main() -> None:
                                 },
                             )
                             st.session_state[draft_key] = edited
-                            selected_rows = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
+                            selected_rows = edited[edited["Select"].map(to_bool)] if "Select" in edited.columns else pd.DataFrame()
                             if not selected_rows.empty:
                                 selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
                         # Stage dropdown selections in rows (apply on Save).
@@ -2603,10 +2616,10 @@ def main() -> None:
                                 if abs(float(adj) - rec_adj) > 1e-9:
                                     edited.at[i, "Selection Source"] = "Manual adjustment"
                                     edited.at[i, "Apply"] = True
-                                elif not bool(rr.get("Apply", False)):
+                                elif not to_bool(rr.get("Apply", False)):
                                     edited.at[i, "Selection Source"] = "Suggested"
                         st.session_state[draft_key] = edited
-                        selected_rows = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
+                        selected_rows = edited[edited["Select"].map(to_bool)] if "Select" in edited.columns else pd.DataFrame()
                         if not selected_rows.empty:
                             selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
 
@@ -2648,7 +2661,7 @@ def main() -> None:
                                 rec_adj = float(rr.get("Rec Bid Adj", 0.0) or 0.0)
                                 if adj_from_dropdown is not None and abs(float(adj_from_dropdown) - rec_adj) > 1e-9:
                                     new_overrides[okey] = {"apply": True, "adj": float(adj_from_dropdown)}
-                                elif bool(rr.get("Apply", False)):
+                                elif to_bool(rr.get("Apply", False)):
                                     new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj", 0.0))}
                                 else:
                                     new_overrides.pop(okey, None)
@@ -2662,7 +2675,6 @@ def main() -> None:
                             with st.spinner("Saving adjustments and recalculating..."):
                                 st.session_state["bid_overrides"] = new_overrides
                                 save_overrides_to_disk(new_overrides)
-                                time.sleep(0.9)
                             st.session_state["tab1_save_notice"] = f"Saved {changed_rows} manual adjustments."
                             st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                             st.rerun()
