@@ -1283,6 +1283,53 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     return p, src
 
 
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
+def build_popup_card_options(
+    rec_df: pd.DataFrame,
+    price_eval_df: pd.DataFrame,
+    state: str,
+    channel_group: str,
+    settings: Settings,
+) -> tuple[pd.DataFrame, str]:
+    candidates, source_used = build_adjustment_candidates(price_eval_df, state, channel_group, settings)
+    rsel = rec_df[(rec_df["State"] == state) & (rec_df["Channel Groups"] == channel_group)].copy()
+    if candidates.empty or rsel.empty:
+        return pd.DataFrame(), source_used
+
+    wr_fb = pd.Series(np.where(rsel["Bids"] > 0, rsel["Clicks"] / rsel["Bids"], 0), index=rsel.index)
+    base_wr = rsel["Bids to Clicks"].combine_first(wr_fb).fillna(0)
+    c2b = rsel["Clicks to Binds Proxy"].fillna(rsel.get("Clicks to Binds", 0)).fillna(0)
+    cur_cost = float(np.nansum(np.where(rsel["Total Click Cost"].notna(), rsel["Total Click Cost"], rsel["Clicks"] * rsel["Avg. CPC"])))
+    cur_binds = float(rsel["Binds"].fillna(0).sum())
+    cur_cpb = (cur_cost / cur_binds) if cur_binds > 0 else np.nan
+
+    out_rows = []
+    for _, cr in candidates.sort_values("Price Adjustment Percent").iterrows():
+        wr_l = float(cr.get("Win Rate Lift %", 0) or 0)
+        cpc_l = float(cr.get("CPC Lift %", 0) or 0)
+        add_clicks = float((rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0)).sum())
+        add_binds = float((rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0) * c2b).sum())
+        exp_cost = float(((rsel["Clicks"] + (rsel["Bids"] * base_wr * max(wr_l, 0))) * rsel["Avg. CPC"] * (1 + cpc_l)).sum())
+        new_cpb = (exp_cost / (cur_binds + add_binds)) if (cur_binds + add_binds) > 0 else np.nan
+        cpb_impact = (new_cpb / cur_cpb - 1) if pd.notna(new_cpb) and pd.notna(cur_cpb) and cur_cpb > 0 else np.nan
+        out_rows.append(
+            {
+                "Bid Adj %": float(cr["Price Adjustment Percent"]),
+                "Sig Icon": cr.get("Sig Icon", "⚪"),
+                "Sig Level": cr.get("Sig Level", "n/a"),
+                "Test Bids": float(cr.get("Bids", 0) or 0),
+                "Win Rate Uplift": wr_l,
+                "CPC Uplift": cpc_l,
+                "Additional Clicks": add_clicks,
+                "Additional Binds": add_binds,
+                "Expected Total Cost": exp_cost,
+                "Additional Budget Needed": exp_cost - cur_cost,
+                "CPB Impact": cpb_impact,
+            }
+        )
+    return pd.DataFrame(out_rows), source_used
+
+
 def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
     if not overrides:
         return rec_df
@@ -2285,7 +2332,6 @@ def main() -> None:
 
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
                             Bids=("Bids", "sum"),
-                            Binds=("Binds", "sum"),
                             SOV=("SOV", "mean"),
                             Clicks=("Clicks", "sum"),
                             **{"Win Rate": ("Bids to Clicks", "mean")},
@@ -2333,13 +2379,13 @@ def main() -> None:
                         table_df = table_df[
                             [
                                 "Channel Groups",
-                                "Binds",
+                                "Bids",
                                 "SOV",
                                 "Clicks",
-                                "Rec. Bid Adj.",
-                                "Explore",
                                 "Win Rate",
                                 "Total Cost",
+                                "Rec. Bid Adj.",
+                                "Explore",
                                 "Expected Total Cost",
                                 "Additional Budget Needed",
                                 "Expected Additional Binds",
@@ -2393,22 +2439,22 @@ def main() -> None:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_selection("multiple", use_checkbox=True)
-                            gb.configure_column("Channel Groups", editable=False, pinned="left", width=190)
+                            gb.configure_column("Channel Groups", editable=False, pinned="left", width=178)
                             gb.configure_column("Open Popup", hide=True)
-                            gb.configure_column("Binds", editable=False, width=88, type=["numericColumn"])
-                            gb.configure_column("SOV", editable=False, width=80, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
-                            gb.configure_column("Clicks", editable=False, width=88, type=["numericColumn"])
-                            gb.configure_column("Rec. Bid Adj.", editable=False, width=104, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
-                            gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=78)
+                            gb.configure_column("Bids", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
+                            gb.configure_column("SOV", editable=False, width=76, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
+                            gb.configure_column("Clicks", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
+                            gb.configure_column("Win Rate", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
+                            gb.configure_column("Total Cost", editable=False, width=108, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=60)
                             gb.configure_column("Selected Bid Adj.", hide=True)
-                            gb.configure_column("Win Rate", editable=False, width=96, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
-                            gb.configure_column("Total Cost", editable=False, width=112, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Expected Total Cost", editable=False, width=136, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
-                            gb.configure_column("Expected Additional Binds", editable=False, width=136, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
-                            gb.configure_column("CPC Lift %", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
-                            gb.configure_column("Apply", editable=True, width=82)
-                            gb.configure_column("Selection Source", editable=False, width=118)
+                            gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=116, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Expected Additional Binds", editable=False, width=124, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
+                            gb.configure_column("CPC Lift %", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
+                            gb.configure_column("Apply", editable=True, width=70)
+                            gb.configure_column("Selection Source", editable=False, width=104)
                             go = gb.build()
                             custom_css = {
                                 ".ag-root-wrapper": {"background-color": "#0b1220", "border": "1px solid #1f2937", "border-radius": "10px"},
@@ -2422,7 +2468,7 @@ def main() -> None:
                                 gridOptions=go,
                                 allow_unsafe_jscode=True,
                                 update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
-                                fit_columns_on_grid_load=False,
+                                fit_columns_on_grid_load=True,
                                 height=420,
                                 theme="balham-dark" if dark_mode else "balham",
                                 custom_css=custom_css,
@@ -2493,12 +2539,11 @@ def main() -> None:
                         target = st.session_state.get("tab1_explore_target")
                         if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
                             ch_sel = str(target.get("channel"))
-                            rsel = state_channels[state_channels["Channel Groups"] == ch_sel].copy()
-                            candidates, source_used = build_adjustment_candidates(price_eval, selected_state, ch_sel, settings)
+                            popup_df, source_used = build_popup_card_options(rec_df, price_eval, selected_state, ch_sel, settings)
 
                             def render_alternative_cards() -> None:
                                 st.caption(f"Adjustment source: {source_used}")
-                                if candidates.empty or rsel.empty:
+                                if popup_df.empty:
                                     st.info("No medium/strong stat-sig adjustment points under current guardrails.")
                                     if st.button("Close", key=f"tab1_explore_close_{selected_state}_{ch_sel}"):
                                         st.session_state["tab1_explore_target"] = None
@@ -2506,29 +2551,21 @@ def main() -> None:
                                         st.rerun()
                                     return
 
-                                wr_fb = pd.Series(np.where(rsel["Bids"] > 0, rsel["Clicks"] / rsel["Bids"], 0), index=rsel.index)
-                                base_wr = rsel["Bids to Clicks"].combine_first(wr_fb).fillna(0)
-                                c2b = rsel["Clicks to Binds Proxy"].fillna(rsel.get("Clicks to Binds", 0)).fillna(0)
-                                cur_cost = float(np.nansum(np.where(rsel["Total Click Cost"].notna(), rsel["Total Click Cost"], rsel["Clicks"] * rsel["Avg. CPC"])))
-                                cur_binds = float(rsel["Binds"].fillna(0).sum())
-                                cur_cpb = (cur_cost / cur_binds) if cur_binds > 0 else np.nan
-
-                                chunks = [candidates.iloc[i:i + 3] for i in range(0, len(candidates), 3)]
+                                chunks = [popup_df.iloc[i:i + 3] for i in range(0, len(popup_df), 3)]
                                 for bi, block in enumerate(chunks):
                                     cols = st.columns(len(block))
                                     for ci, (_, cr) in enumerate(block.iterrows()):
                                         with cols[ci]:
-                                            wr_l = float(cr.get("Win Rate Lift %", 0) or 0)
-                                            cpc_l = float(cr.get("CPC Lift %", 0) or 0)
-                                            add_clicks = float((rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0)).sum())
-                                            add_binds = float((rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0) * c2b).sum())
-                                            exp_cost = float(((rsel["Clicks"] + (rsel["Bids"] * base_wr * max(wr_l, 0))) * rsel["Avg. CPC"] * (1 + cpc_l)).sum())
-                                            new_cpb = (exp_cost / (cur_binds + add_binds)) if (cur_binds + add_binds) > 0 else np.nan
-                                            cpb_impact = (new_cpb / cur_cpb - 1) if pd.notna(new_cpb) and pd.notna(cur_cpb) and cur_cpb > 0 else np.nan
+                                            wr_l = float(cr.get("Win Rate Uplift", 0) or 0)
+                                            cpc_l = float(cr.get("CPC Uplift", 0) or 0)
+                                            add_clicks = float(cr.get("Additional Clicks", 0) or 0)
+                                            add_binds = float(cr.get("Additional Binds", 0) or 0)
+                                            exp_cost = float(cr.get("Expected Total Cost", 0) or 0)
+                                            cpb_impact = cr.get("CPB Impact", np.nan)
                                             card_html = (
                                                 f"<div class='alt-card'>"
-                                                f"<h5>{float(cr['Price Adjustment Percent']):+.0f}%</h5>"
-                                                f"<div class='alt-kpi'>{cr.get('Sig Icon', '⚪')} {cr.get('Sig Level', 'n/a')} stat-sig | Bids {float(cr.get('Bids', 0)):,.0f}</div>"
+                                                f"<h5>{float(cr['Bid Adj %']):+.0f}%</h5>"
+                                                f"<div class='alt-kpi'>{cr.get('Sig Icon', '⚪')} {cr.get('Sig Level', 'n/a')} stat-sig | Bids {float(cr.get('Test Bids', 0)):,.0f}</div>"
                                                 f"<div class='alt-kpi'>Win Rate change: {wr_l:+.0%}</div>"
                                                 f"<div class='alt-kpi'>CPC uplift: {cpc_l:+.0%}</div>"
                                                 f"<div class='alt-kpi'>Potential additional binds: {add_binds:,.1f}</div>"
@@ -2537,14 +2574,14 @@ def main() -> None:
                                             )
                                             st.markdown(card_html, unsafe_allow_html=True)
                                             if st.button(
-                                                f"Select {float(cr['Price Adjustment Percent']):+.0f}%",
+                                                f"Select {float(cr['Bid Adj %']):+.0f}%",
                                                 key=f"tab1_pick_adj_{selected_state}_{ch_sel}_{bi}_{ci}",
                                                 use_container_width=True,
                                             ):
                                                 new_overrides = dict(st.session_state["bid_overrides"])
                                                 new_overrides[f"{selected_state}|{ch_sel}"] = {
                                                     "apply": True,
-                                                    "adj": float(cr["Price Adjustment Percent"]),
+                                                    "adj": float(cr["Bid Adj %"]),
                                                 }
                                                 st.session_state["bid_overrides"] = new_overrides
                                                 st.session_state["tab1_explore_target"] = None
