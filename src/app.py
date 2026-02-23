@@ -184,6 +184,8 @@ class Settings:
     min_clicks_price_sig: int
     min_binds_perf_sig: int
     optimization_mode: str
+    max_perf_drop: float
+    min_new_performance: float
 
 
 OPTIMIZATION_MODES = [
@@ -361,28 +363,90 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
     px = px[(px["Price Adjustment Percent"].fillna(0) >= 0) & (px["Win Rate Lift %"].fillna(0) >= 0)]
 
-    state_best: dict[tuple[str, str], pd.Series] = {}
+    state_curves: dict[tuple[str, str], pd.DataFrame] = {}
     if "State" in px.columns:
-        st_best = (
-            px.sort_values(["Win Rate Lift %", "Growth Opportunity Score"], ascending=False)
-            .groupby(["State", "Channel Groups"], as_index=False)
-            .first()
-        )
-        state_best = {
-            (str(r["State"]), str(r["Channel Groups"])): r
-            for _, r in st_best.iterrows()
+        state_curves = {
+            (str(st), str(ch)): g.sort_values("Price Adjustment Percent")
+            for (st, ch), g in px.groupby(["State", "Channel Groups"])
         }
+    ch_curves = {str(ch): g.sort_values("Price Adjustment Percent") for ch, g in px.groupby("Channel Groups")}
 
-    ch_best_df = (
-        px.sort_values(["Win Rate Lift %", "Growth Opportunity Score"], ascending=False)
-        .groupby("Channel Groups", as_index=False)
-        .first()
-    )
-    ch_best = {str(r["Channel Groups"]): r for _, r in ch_best_df.iterrows()}
+    def _pick_from_curve(curve: pd.DataFrame, row: pd.Series) -> pd.Series | None:
+        if curve is None or curve.empty:
+            return None
+        bids = float(row.get("Bids", 0) or 0)
+        clicks = float(row.get("Clicks", 0) or 0)
+        avg_cpc = float(row.get("Avg. CPC", 0) or 0)
+        binds = float(row.get("Binds", 0) or 0)
+        current_cost = float(row.get("Total Click Cost", np.nan))
+        if pd.isna(current_cost):
+            current_cost = clicks * avg_cpc
+
+        base_wr = float(row.get("Bids to Clicks", np.nan))
+        if pd.isna(base_wr):
+            base_wr = (clicks / bids) if bids > 0 else 0.0
+        c2b_seg = float(row.get("Seg Clicks to Binds", np.nan))
+        c2b_ch = float(row.get("Clicks to Binds", np.nan))
+        c2b = c2b_seg if (bids >= settings.min_bids_channel_state and not pd.isna(c2b_seg)) else c2b_ch
+        if pd.isna(c2b):
+            c2b = 0.0
+
+        target_cpb = float(row.get("Target CPB", np.nan))
+        actual_cpb = float(row.get("CPB", np.nan))
+        if pd.isna(actual_cpb) and binds > 0:
+            actual_cpb = current_cost / binds
+        actual_perf = np.nan
+        if pd.notna(target_cpb) and target_cpb > 0 and pd.notna(actual_cpb) and actual_cpb > 0:
+            actual_perf = target_cpb / actual_cpb
+
+        scored = []
+        for _, c in curve.iterrows():
+            wr_lift = float(c.get("Win Rate Lift %", 0) or 0)
+            cpc_lift = float(c.get("CPC Lift %", 0) or 0)
+            add_clicks = bids * base_wr * max(wr_lift, 0.0)
+            add_binds = add_clicks * c2b
+            new_binds = binds + add_binds
+            new_cost = (clicks + add_clicks) * avg_cpc * (1 + cpc_lift)
+            new_cpb = (new_cost / new_binds) if new_binds > 0 else np.nan
+            new_perf = np.nan
+            if pd.notna(target_cpb) and target_cpb > 0 and pd.notna(new_cpb) and new_cpb > 0:
+                new_perf = target_cpb / new_cpb
+            perf_drop = 0.0
+            if pd.notna(actual_perf) and pd.notna(new_perf):
+                perf_drop = max(actual_perf - new_perf, 0.0)
+            perf_ok = True
+            if pd.notna(new_perf):
+                perf_ok = (new_perf >= settings.min_new_performance) and (perf_drop <= settings.max_perf_drop)
+            scored.append(
+                {
+                    "cand": c,
+                    "add_binds": add_binds,
+                    "add_clicks": add_clicks,
+                    "perf_drop": perf_drop,
+                    "new_perf": new_perf,
+                    "perf_ok": perf_ok,
+                }
+            )
+        if not scored:
+            return None
+        valid = [x for x in scored if x["perf_ok"]]
+        if valid:
+            best = sorted(
+                valid,
+                key=lambda x: (x["add_binds"], -float(x["cand"].get("CPC Lift %", 0) or 0), -float(x["cand"].get("Price Adjustment Percent", 0) or 0)),
+                reverse=True,
+            )[0]
+            return best["cand"]
+        # If all points hurt performance too much, choose the most conservative feasible degradation.
+        best = sorted(
+            scored,
+            key=lambda x: (x["perf_drop"], -x["add_binds"], float(x["cand"].get("Price Adjustment Percent", 0) or 0)),
+        )[0]
+        return best["cand"]
 
     def _lookup(row: pd.Series) -> pd.Series:
         key_sc = (str(row.get("State", "")), str(row.get("Channel Groups", "")))
-        srow = state_best.get(key_sc)
+        srow = _pick_from_curve(state_curves.get(key_sc), row)
         if srow is not None:
             return pd.Series(
                 [
@@ -394,7 +458,7 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
                     True,
                 ]
             )
-        crow = ch_best.get(str(row.get("Channel Groups", "")))
+        crow = _pick_from_curve(ch_curves.get(str(row.get("Channel Groups", ""))), row)
         if crow is not None:
             return pd.Series(
                 [
@@ -441,12 +505,9 @@ def apply_price_effects(
         if g is None or g.empty:
             return pd.Series([0.0, 0.0, 0.0, 0.0])
         target = row["Suggested Price Adjustment %"]
-        # Growth mode: snap upward to the next tested adjustment when possible.
-        up = g[g["Price Adjustment Percent"] >= target]
-        if not up.empty:
-            near = up.sort_values("Price Adjustment Percent").iloc[0]
-        else:
-            near = g.sort_values("Price Adjustment Percent").iloc[-1]
+        g2 = g.copy()
+        g2["dist"] = (g2["Price Adjustment Percent"] - target).abs()
+        near = g2.sort_values(["dist", "Price Adjustment Percent"], ascending=[True, True]).iloc[0]
         return pd.Series(
             [
                 near["Price Adjustment Percent"],
@@ -1422,6 +1483,8 @@ def main() -> None:
         min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.65, 0.01)
         roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
+        max_perf_drop = st.slider("Max performance drop vs current", 0.00, 0.60, 0.15, 0.01)
+        min_new_performance = st.slider("Minimum new performance", 0.20, 1.50, 0.80, 0.01)
 
         st.markdown("**Stat Sig Rules**")
         min_clicks_intent_sig = st.slider("Min clicks for intent significance", 10, 300, 80, 5)
@@ -1461,6 +1524,8 @@ def main() -> None:
             min_clicks_price_sig=min_clicks_price_sig,
             min_binds_perf_sig=min_binds_perf_sig,
             optimization_mode=optimization_mode,
+            max_perf_drop=max_perf_drop,
+            min_new_performance=min_new_performance,
         )
         st.caption(
             f"Effective CPC cap: {effective_cpc_cap_pct(settings):.0f}% | "
