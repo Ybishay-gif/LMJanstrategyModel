@@ -2203,7 +2203,7 @@ def main() -> None:
                             st.session_state["bid_overrides"] = new_overrides
                             st.rerun()
 
-                        with st.popover("🔎 Explore Alternative Adjustments"):
+                        with st.expander("🔎 Explore Alternative Adjustments", expanded=False):
                             ch_opts = sorted(state_channels["Channel Groups"].dropna().unique().tolist())
                             ch_sel = st.selectbox("Channel Group", options=ch_opts, key=f"tab1_explore_channel_{selected_state}")
                             mode_settings = Settings(**{**settings.__dict__, "optimization_mode": settings.optimization_mode})
