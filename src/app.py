@@ -1577,13 +1577,15 @@ def main() -> None:
                         )
                         state_channels = apply_scenario_effects(state_channels, price_eval, "Scenario Target Adj %", settings)
                         state_channels["Scenario Lift Proxy %"] = state_channels["Scenario Lift Proxy %"].clip(lower=0)
-                        state_wr = state_channels["Bids to Clicks"].fillna(
+                        state_wr_fallback = pd.Series(
                             np.where(
                                 state_channels["Bids"] > 0,
                                 state_channels["Clicks"] / state_channels["Bids"],
                                 0,
-                            )
+                            ),
+                            index=state_channels.index,
                         )
+                        state_wr = state_channels["Bids to Clicks"].combine_first(state_wr_fallback)
                         state_channels["Expected Additional Clicks"] = (
                             state_channels["Bids"].fillna(0)
                             * state_wr.fillna(0)
@@ -1703,7 +1705,11 @@ def main() -> None:
         scen["Scenario Target Adj %"] = np.minimum(scen["Scenario Target Adj %"], scen["Strategy Max Adj %"])
         scen = apply_scenario_effects(scen, price_eval, "Scenario Target Adj %", settings)
         scen["Scenario Lift Proxy %"] = scen["Scenario Lift Proxy %"].clip(lower=0)
-        scen_wr = scen["Bids to Clicks"].fillna(np.where(scen["Bids"] > 0, scen["Clicks"] / scen["Bids"], 0))
+        scen_wr_fallback = pd.Series(
+            np.where(scen["Bids"] > 0, scen["Clicks"] / scen["Bids"], 0),
+            index=scen.index,
+        )
+        scen_wr = scen["Bids to Clicks"].combine_first(scen_wr_fallback)
         scen["Additional Clicks (scenario)"] = scen["Bids"].fillna(0) * scen_wr.fillna(0) * scen["Scenario Lift Proxy %"]
         scen["Additional Binds (scenario)"] = scen["Additional Clicks (scenario)"] * scen["Clicks to Binds Proxy"].fillna(0)
         if "Total Click Cost" in scen.columns:
