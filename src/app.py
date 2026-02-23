@@ -1945,6 +1945,38 @@ def main() -> None:
         )
         map_df.loc[~map_df["Conflict Perf Label"].isin(CONFLICT_PERF_COLOR.keys()), "Conflict Perf Label"] = "Unknown | Unknown"
 
+        st.markdown("**Neon Summary Charts**")
+        t1c1, t1c2, t1c3, t1c4 = st.columns(4)
+        strat_mix = rec_df.groupby("Strategy Bucket", as_index=False)["Bids"].sum().sort_values("Bids", ascending=False)
+        if not strat_mix.empty:
+            fig_t1_strat = px.pie(
+                strat_mix,
+                names="Strategy Bucket",
+                values="Bids",
+                hole=0.65,
+                color="Strategy Bucket",
+                color_discrete_map=STRATEGY_COLOR,
+                template=plotly_template,
+                title="Strategy Mix",
+            )
+            fig_t1_strat.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+            t1c1.plotly_chart(fig_t1_strat, use_container_width=True, key="tab1_strat_mix")
+        seg_mix = rec_df.groupby("Segment", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
+        fig_t1_seg = px.bar(seg_mix, x="Segment", y="Clicks", template=plotly_template, title="Clicks by Segment")
+        fig_t1_seg.update_traces(marker_color="#60a5fa")
+        fig_t1_seg.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+        t1c2.plotly_chart(fig_t1_seg, use_container_width=True, key="tab1_seg_mix")
+        top_growth_states = map_df[["State", "Expected_Additional_Clicks"]].sort_values("Expected_Additional_Clicks", ascending=False).head(8)
+        fig_t1_state_g = px.bar(top_growth_states, x="State", y="Expected_Additional_Clicks", template=plotly_template, title="Top Growth States")
+        fig_t1_state_g.update_traces(marker_color="#34d399")
+        fig_t1_state_g.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+        t1c3.plotly_chart(fig_t1_state_g, use_container_width=True, key="tab1_state_growth")
+        top_channels = rec_df.groupby("Channel Groups", as_index=False)["Expected Additional Binds"].sum().sort_values("Expected Additional Binds", ascending=False).head(8)
+        fig_t1_ch = px.bar(top_channels, x="Channel Groups", y="Expected Additional Binds", template=plotly_template, title="Top Growth Channels")
+        fig_t1_ch.update_traces(marker_color="#22d3ee")
+        fig_t1_ch.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+        t1c4.plotly_chart(fig_t1_ch, use_container_width=True, key="tab1_channel_growth")
+
         map_mode = st.radio(
             "Map color mode",
             options=["Product Strategy", "Performance Group", "Conflict Highlight"],
@@ -2006,6 +2038,8 @@ def main() -> None:
             legend_title_text="Strategy",
             template=plotly_template,
             clickmode="event+select",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
             hoverlabel=dict(
                 bgcolor="#0F172A" if dark_mode else "#F8FAFC",
                 bordercolor="#334155" if dark_mode else "#CBD5E1",
@@ -2013,6 +2047,7 @@ def main() -> None:
                 align="left",
             ),
         )
+        fig.update_geos(bgcolor="rgba(0,0,0,0)")
 
         if map_mode == "Conflict Highlight":
             st.markdown(
