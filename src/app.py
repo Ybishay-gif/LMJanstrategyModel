@@ -1915,6 +1915,7 @@ def main() -> None:
     rec_df, state_extra_df, state_seg_extra_df, channel_summary_df = build_model_tables(
         state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
     )
+    rec_df_model = rec_df.copy()
     if "bid_overrides" not in st.session_state:
         st.session_state["bid_overrides"] = load_overrides_from_disk()
     rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
@@ -2379,6 +2380,7 @@ def main() -> None:
 
                 st.markdown("**📌 Channel Groups In This State**")
                 state_channels = rec_df[rec_df["State"] == selected_state].copy()
+                state_channels_model = rec_df_model[rec_df_model["State"] == selected_state].copy()
                 if state_channels.empty:
                     st.info("No channel-group rows found for this state.")
                 else:
@@ -2411,11 +2413,14 @@ def main() -> None:
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
                             **{"Additional Budget Needed": ("Additional Budget Needed", "sum")},
-                            **{"Rec. Bid Adj.": ("Applied Price Adjustment %", "median")},
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
                             **{"CPC Lift %": ("CPC Lift %", "mean")},
                         ).sort_values("Expected Additional Clicks", ascending=False)
+                        rec_bid_model = state_channels_model.groupby("Channel Groups", as_index=False).agg(
+                            **{"Rec. Bid Adj.": ("Applied Price Adjustment %", "median")}
+                        )
+                        cg_state = cg_state.merge(rec_bid_model, on="Channel Groups", how="left")
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
                             cg_state["Additional Budget Needed"] / cg_state["Total Cost"],
