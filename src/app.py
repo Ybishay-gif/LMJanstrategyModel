@@ -895,6 +895,62 @@ def _fmt_cur(x):
     return "n/a" if pd.isna(x) else f"${x:,.0f}"
 
 
+def _safe_weighted_mean(values: pd.Series, weights: pd.Series) -> float:
+    v = pd.to_numeric(values, errors="coerce")
+    w = pd.to_numeric(weights, errors="coerce").fillna(0)
+    m = v.notna() & w.notna() & (w > 0)
+    if not m.any():
+        return float(v.mean(skipna=True)) if v.notna().any() else np.nan
+    return float(np.average(v[m], weights=w[m]))
+
+
+def simulate_mode_by_strategy(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    mode_map = {
+        "Strongest Momentum": "Max Growth",
+        "Moderate Momentum": "Growth Leaning",
+        "Minimal Growth": "Balanced",
+        "LTV Constrained": "Cost Leaning",
+        "Closure Constrained": "Cost Leaning",
+        "Inactive/Low Spend": "Optimize Cost",
+    }
+    base = rec_df.copy()
+    base["Strategy Mode"] = base["Strategy Bucket"].map(mode_map).fillna("Balanced")
+
+    out_parts: list[pd.DataFrame] = []
+    for mode in OPTIMIZATION_MODES:
+        part = base[base["Strategy Mode"] == mode].copy()
+        if part.empty:
+            continue
+        mode_settings = replace(settings, optimization_mode=mode)
+        part["Scenario Target Adj %"] = part["Applied Price Adjustment %"]
+        part["Scenario Target Adj %"] = np.minimum(part["Scenario Target Adj %"], part["Strategy Max Adj %"])
+        part = apply_scenario_effects(part, price_eval_df, "Scenario Target Adj %", mode_settings)
+        part["Scenario Lift Proxy %"] = part["Scenario Lift Proxy %"].clip(lower=0)
+        wr_fb = pd.Series(np.where(part["Bids"] > 0, part["Clicks"] / part["Bids"], 0), index=part.index)
+        wr = part["Bids to Clicks"].combine_first(wr_fb)
+        part["Expected Additional Clicks"] = part["Bids"].fillna(0) * wr.fillna(0) * part["Scenario Lift Proxy %"]
+        part["Expected Additional Binds"] = part["Expected Additional Clicks"] * part["Clicks to Binds Proxy"].fillna(0)
+        part["Current Cost Sim"] = np.where(
+            part["Total Click Cost"].notna(), part["Total Click Cost"], part["Clicks"] * part["Avg. CPC"]
+        )
+        part["Expected Total Cost Sim"] = (
+            (part["Clicks"] + part["Expected Additional Clicks"]) * part["Avg. CPC"] * (1 + part["Scenario CPC Lift %"].fillna(0))
+        )
+        part["Additional Budget Needed Sim"] = part["Expected Total Cost Sim"] - part["Current Cost Sim"]
+        out_parts.append(part)
+    if not out_parts:
+        return base.assign(
+            **{
+                "Expected Additional Clicks": 0.0,
+                "Expected Additional Binds": 0.0,
+                "Current Cost Sim": 0.0,
+                "Expected Total Cost Sim": 0.0,
+                "Additional Budget Needed Sim": 0.0,
+            }
+        )
+    return pd.concat(out_parts, ignore_index=True)
+
+
 def format_display_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     pct_cols = {
@@ -1458,9 +1514,171 @@ def main() -> None:
         state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
     )
 
-    tabs = st.tabs(["🗺️ Tab 1: State Momentum Map", "📊 Tab 2: Channel Group Analysis", "🧠 Tab 3: Channel Group and States"])
+    tabs = st.tabs([
+        "🏁 Tab 0: Executive State View",
+        "🗺️ Tab 1: State Momentum Map",
+        "📊 Tab 2: Channel Group Analysis",
+        "🧠 Tab 3: Channel Group and States",
+    ])
 
     with tabs[0]:
+        map_df0 = state_df.merge(state_extra_df, on="State", how="left")
+        map_df0["Expected_Additional_Clicks"] = map_df0["Expected_Additional_Clicks"].fillna(0)
+        map_df0["Expected_Additional_Binds"] = map_df0["Expected_Additional_Binds"].fillna(0)
+        map_df0["Indicator"] = np.where(
+            map_df0["Performance Tone"] == "Good",
+            "🟢",
+            np.where(map_df0["Performance Tone"] == "Poor", "🔴", "🟡"),
+        )
+        map_df0["Conflict Label"] = map_df0["Conflict Arrow"] + " " + map_df0["Conflict Level"]
+        map_df0["ROE Display"] = map_df0["ROE"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+        map_df0["CR Display"] = map_df0["Combined Ratio"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+        map_df0["Perf Display"] = map_df0["Performance"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+        map_df0["LTV Display"] = map_df0["Avg. MRLTV"].map(lambda x: "n/a" if pd.isna(x) else f"${x:,.0f}")
+        map_df0["Binds Display"] = map_df0["Binds"].map(lambda x: "n/a" if pd.isna(x) else f"{x:,.0f}")
+        map_df0["Add Clicks Display"] = map_df0["Expected_Additional_Clicks"].map(lambda x: f"{x:,.0f}")
+        map_df0["Add Binds Display"] = map_df0["Expected_Additional_Binds"].map(lambda x: f"{x:,.1f}")
+        map_df0["Perf Group Display"] = map_df0["ROE Performance Group"].fillna("Low Sig - Review")
+        map_df0["Conflict Perf Label"] = (
+            map_df0["Performance Tone"].fillna("Unknown").astype(str)
+            + " | "
+            + map_df0["Conflict Level"].fillna("Unknown").astype(str)
+        )
+        map_df0.loc[~map_df0["Conflict Perf Label"].isin(CONFLICT_PERF_COLOR.keys()), "Conflict Perf Label"] = "Unknown | Unknown"
+
+        sim_all = simulate_mode_by_strategy(rec_df, price_eval, settings)
+        total_clicks = float(pd.to_numeric(state_df["Clicks"], errors="coerce").fillna(0).sum())
+        total_binds = float(pd.to_numeric(state_df["Binds"], errors="coerce").fillna(0).sum())
+        total_bids = float(pd.to_numeric(rec_df["Bids"], errors="coerce").fillna(0).sum())
+        total_clicks_ch = float(pd.to_numeric(rec_df["Clicks"], errors="coerce").fillna(0).sum())
+        avg_win_rate = (total_clicks_ch / total_bids) if total_bids > 0 else np.nan
+        total_cost = float(pd.to_numeric(sim_all["Current Cost Sim"], errors="coerce").fillna(0).sum())
+        q2b_num = pd.to_numeric(state_df.get("Quotes to Binds", np.nan), errors="coerce")
+        avg_q2b = float(q2b_num.mean(skipna=True)) if q2b_num.notna().any() else np.nan
+        cpb = (total_cost / total_binds) if total_binds > 0 else np.nan
+        roe_w = _safe_weighted_mean(state_df["ROE"], state_df["Binds"])
+        cr_w = _safe_weighted_mean(state_df["Combined Ratio"], state_df["Binds"])
+        ltv_w = _safe_weighted_mean(state_df["Avg. MRLTV"], state_df["Binds"])
+        add_clicks = float(pd.to_numeric(sim_all["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
+        add_binds = float(pd.to_numeric(sim_all["Expected Additional Binds"], errors="coerce").fillna(0).sum())
+        add_budget = float(pd.to_numeric(sim_all["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Total Clicks", f"{total_clicks:,.0f}")
+        k2.metric("Avg Win Rate", "n/a" if pd.isna(avg_win_rate) else f"{avg_win_rate:.1%}")
+        k3.metric("Cost", f"${total_cost:,.0f}")
+        k4.metric("Avg Q2B", "n/a" if pd.isna(avg_q2b) else f"{avg_q2b:.1%}")
+        k5.metric("Binds", f"{total_binds:,.0f}")
+        k6, k7, k8, k9 = st.columns(4)
+        k6.metric("CPB", "n/a" if pd.isna(cpb) else f"${cpb:,.0f}")
+        k7.metric("ROE", "n/a" if pd.isna(roe_w) else f"{roe_w:.1%}")
+        k8.metric("Combined Ratio", "n/a" if pd.isna(cr_w) else f"{cr_w:.1%}")
+        k9.metric("LTV", "n/a" if pd.isna(ltv_w) else f"${ltv_w:,.0f}")
+        k10, k11, k12 = st.columns(3)
+        k10.metric("Additional Clicks", f"{add_clicks:,.0f}")
+        k11.metric("Additional Binds", f"{add_binds:,.1f}")
+        k12.metric("Required Budget", f"${add_budget:,.0f}")
+
+        map_mode0 = st.radio(
+            "Map color mode",
+            options=["Product Strategy", "Performance Group", "Conflict Highlight"],
+            horizontal=True,
+            key="tab0_map_color_mode",
+        )
+        if map_mode0 == "Product Strategy":
+            map_color_col0, map_color_map0, map_title0 = "Strategy Bucket", STRATEGY_COLOR, "US Map: Product Strategy + State KPIs"
+        elif map_mode0 == "Performance Group":
+            map_color_col0, map_color_map0, map_title0 = "ROE Performance Group", PERFORMANCE_GROUP_COLOR, "US Map: Performance Group + State KPIs"
+        else:
+            map_color_col0, map_color_map0, map_title0 = "Conflict Perf Label", CONFLICT_PERF_COLOR, "US Map: Conflict + Performance Highlight"
+
+        fig0 = px.choropleth(
+            map_df0,
+            locations="State",
+            locationmode="USA-states",
+            scope="usa",
+            color=map_color_col0,
+            color_discrete_map=map_color_map0,
+            custom_data=[
+                "Strategy Bucket", "Perf Group Display", "Indicator", "Conflict Label",
+                "ROE Display", "CR Display", "Perf Display", "Binds Display",
+                "LTV Display", "Add Clicks Display", "Add Binds Display",
+            ],
+            title=map_title0,
+        )
+        fig0.update_traces(
+            hovertemplate=(
+                "<b style='font-size:15px;'>%{location}</b><br>"
+                "<span style='opacity:0.88;'>%{customdata[0]}</span><br>"
+                "<span style='opacity:0.78;'>Perf Group: %{customdata[1]}</span><br>"
+                "<span style='opacity:0.78;'>%{customdata[2]} %{customdata[3]}</span>"
+                "<br>━━━━━━━━━━━━<br>"
+                "<b>ROE</b> %{customdata[4]}  ·  <b>CR</b> %{customdata[5]}<br>"
+                "<b>Perf</b> %{customdata[6]}  ·  <b>Binds</b> %{customdata[7]}<br>"
+                "<b>Avg LTV</b> %{customdata[8]}<br>"
+                "<br><b>Growth Upside</b><br>"
+                "Additional Clicks: <b>%{customdata[9]}</b><br>"
+                "Additional Binds: <b>%{customdata[10]}</b><extra></extra>"
+            ),
+        )
+        fig0.update_layout(margin=dict(l=0, r=0, t=40, b=0), template=plotly_template)
+        st.plotly_chart(fig0, use_container_width=True, key="state_map_tab0")
+
+        st.markdown("**Product Strategy Sections**")
+        for strat in [s for s in STRATEGY_COLOR.keys() if s in map_df0["Strategy Bucket"].dropna().unique().tolist()]:
+            st_sec = state_df[state_df["Strategy Bucket"] == strat]
+            rec_sec = sim_all[sim_all["Strategy Bucket"] == strat]
+            if st_sec.empty:
+                continue
+            states_txt = ", ".join(sorted(st_sec["State"].dropna().unique().tolist()))
+            s_clicks = float(pd.to_numeric(st_sec["Clicks"], errors="coerce").fillna(0).sum())
+            s_binds = float(pd.to_numeric(st_sec["Binds"], errors="coerce").fillna(0).sum())
+            s_bids = float(pd.to_numeric(rec_sec["Bids"], errors="coerce").fillna(0).sum())
+            s_clicks_ch = float(pd.to_numeric(rec_sec["Clicks"], errors="coerce").fillna(0).sum())
+            s_wr = (s_clicks_ch / s_bids) if s_bids > 0 else np.nan
+            s_cost = float(pd.to_numeric(rec_sec["Current Cost Sim"], errors="coerce").fillna(0).sum())
+            s_cpb = (s_cost / s_binds) if s_binds > 0 else np.nan
+            s_roe = _safe_weighted_mean(st_sec["ROE"], st_sec["Binds"])
+            s_cr = _safe_weighted_mean(st_sec["Combined Ratio"], st_sec["Binds"])
+            s_ltv = _safe_weighted_mean(st_sec["Avg. MRLTV"], st_sec["Binds"])
+            s_add_clicks = float(pd.to_numeric(rec_sec["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
+            s_add_binds = float(pd.to_numeric(rec_sec["Expected Additional Binds"], errors="coerce").fillna(0).sum())
+            s_add_budget = float(pd.to_numeric(rec_sec["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
+
+            with st.container(border=True):
+                st.markdown(f"**{strat}**")
+                st.caption(f"States: {states_txt}")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Clicks", f"{s_clicks:,.0f}")
+                c2.metric("Cost", f"${s_cost:,.0f}")
+                c3.metric("Win Rate", "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}")
+                c4.metric("Binds", f"{s_binds:,.0f}")
+                c5.metric("CPB", "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}")
+                c6, c7, c8 = st.columns(3)
+                c6.metric("ROE", "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}")
+                c7.metric("LTV", "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}")
+                c8.metric("Combined Ratio", "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}")
+                c9, c10, c11 = st.columns(3)
+                c9.metric("Additional Clicks", f"{s_add_clicks:,.0f}")
+                c10.metric("Additional Binds", f"{s_add_binds:,.1f}")
+                c11.metric("Required Budget", f"${s_add_budget:,.0f}")
+
+                seg_tbl = rec_sec.groupby("Segment", as_index=False).agg(
+                    Clicks=("Clicks", "sum"),
+                    Bids=("Bids", "sum"),
+                    Cost=("Current Cost Sim", "sum"),
+                    Binds=("Binds", "sum"),
+                    ROE=("ROE Proxy", "mean"),
+                    Combined_Ratio=("CR Proxy", "mean"),
+                    LTV=("MRLTV Proxy", "mean"),
+                )
+                seg_tbl["Win Rate"] = np.where(seg_tbl["Bids"] > 0, seg_tbl["Clicks"] / seg_tbl["Bids"], np.nan)
+                seg_tbl["CPB"] = np.where(seg_tbl["Binds"] > 0, seg_tbl["Cost"] / seg_tbl["Binds"], np.nan)
+                seg_tbl = seg_tbl[["Segment", "Clicks", "Cost", "Win Rate", "Binds", "CPB", "ROE", "LTV", "Combined_Ratio"]]
+                seg_tbl = seg_tbl.rename(columns={"Combined_Ratio": "Combined Ratio"})
+                render_formatted_table(seg_tbl, use_container_width=True)
+
+    with tabs[1]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
         map_df["Expected_Additional_Clicks"] = map_df["Expected_Additional_Clicks"].fillna(0)
         map_df["Expected_Additional_Binds"] = map_df["Expected_Additional_Binds"].fillna(0)
@@ -1828,7 +2046,7 @@ def main() -> None:
         )
         render_formatted_table(state_perf_layer, use_container_width=True)
 
-    with tabs[1]:
+    with tabs[2]:
         st.subheader("📊 Channel Group Analysis")
         current_binds = rec_df["Binds"].fillna(0).sum()
         add_binds = rec_df["Expected Additional Binds"].fillna(0).sum()
@@ -1943,7 +2161,7 @@ def main() -> None:
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
         render_formatted_table(grp, use_container_width=True)
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("🧠 Channel Group + State Recommendations")
 
         c1, c2, c3, c4, c5 = st.columns(5)
