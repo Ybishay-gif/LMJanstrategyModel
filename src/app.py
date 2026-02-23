@@ -2476,6 +2476,7 @@ def main() -> None:
                                 width=350,
                                 valueFormatter="value ? ('▼ ' + value) : '▼ Select adjustment'",
                                 cellEditor="agSelectCellEditor",
+                                cellEditorPopup=True,
                                 cellEditorParams=JsCode(
                                     """
                                     function(params) {
@@ -2517,8 +2518,8 @@ def main() -> None:
                                 fit_columns_on_grid_load=True,
                                 reload_data=True,
                                 height=460,
-                                theme="balham-dark" if dark_mode else "balham",
-                                custom_css=custom_css if dark_mode else None,
+                                theme="balham-dark",
+                                custom_css=custom_css,
                                 key=f"tab1_aggrid_{selected_state}",
                             )
                             edited = pd.DataFrame(grid["data"])
