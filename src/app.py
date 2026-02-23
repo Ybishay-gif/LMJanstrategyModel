@@ -2266,6 +2266,7 @@ def main() -> None:
                             "CPC Lift %",
                         ]
                         table_df = cg_state[cg_state_cols].copy()
+                        table_df["Select"] = False
                         table_df["Selected Bid Adjustment"] = table_df["Recommended Bid Adjustment"]
                         table_df["Apply"] = False
                         table_df["Explore"] = False
@@ -2278,37 +2279,6 @@ def main() -> None:
                                 table_df.at[idx, "Selected Bid Adjustment"] = float(ov.get("adj", rr["Recommended Bid Adjustment"]))
                                 table_df.at[idx, "Selection Source"] = "Manual"
 
-                        b1, b2, b3, b4 = st.columns([2, 1, 1, 1])
-                        bulk_groups = b1.multiselect(
-                            "Bulk select channel groups",
-                            options=table_df["Channel Groups"].tolist(),
-                            default=[],
-                            key=f"tab1_bulk_groups_{selected_state}",
-                        )
-                        bulk_adj = b2.number_input(
-                            "Bulk bid adj %",
-                            min_value=-10.0,
-                            max_value=60.0,
-                            value=10.0,
-                            step=5.0,
-                            key=f"tab1_bulk_adj_{selected_state}",
-                        )
-                        do_apply_bulk = b3.button("Apply Bulk", key=f"tab1_bulk_apply_{selected_state}")
-                        do_revert_bulk = b4.button("Revert Bulk", key=f"tab1_bulk_revert_{selected_state}")
-
-                        if do_apply_bulk and bulk_groups:
-                            new_overrides = dict(st.session_state["bid_overrides"])
-                            for cg in bulk_groups:
-                                new_overrides[f"{selected_state}|{cg}"] = {"apply": True, "adj": float(bulk_adj)}
-                            st.session_state["bid_overrides"] = new_overrides
-                            st.rerun()
-                        if do_revert_bulk and bulk_groups:
-                            new_overrides = dict(st.session_state["bid_overrides"])
-                            for cg in bulk_groups:
-                                new_overrides.pop(f"{selected_state}|{cg}", None)
-                            st.session_state["bid_overrides"] = new_overrides
-                            st.rerun()
-
                         edited = st.data_editor(
                             table_df,
                             use_container_width=True,
@@ -2319,6 +2289,7 @@ def main() -> None:
                                 "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
                                 "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
                                 "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
+                                "Select": st.column_config.CheckboxColumn("Select"),
                                 "Recommended Bid Adjustment": st.column_config.NumberColumn("Recommended", format="%+.0f%%", disabled=True),
                                 "Selected Bid Adjustment": st.column_config.NumberColumn("Selected", format="%+.0f%%"),
                                 "Apply": st.column_config.CheckboxColumn("Apply"),
@@ -2334,6 +2305,33 @@ def main() -> None:
                                 "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
                             },
                         )
+
+                        a1, a2, a3 = st.columns([1, 1, 2])
+                        bulk_adj = a1.number_input(
+                            "Set selected to bid adj %",
+                            min_value=-10.0,
+                            max_value=60.0,
+                            value=10.0,
+                            step=5.0,
+                            key=f"tab1_bulk_adj_{selected_state}",
+                        )
+                        do_apply_bulk = a2.button("Apply To Selected Rows", key=f"tab1_bulk_apply_{selected_state}")
+                        do_revert_bulk = a3.button("Revert Selected Rows", key=f"tab1_bulk_revert_{selected_state}")
+
+                        selected_rows = edited[edited["Select"] == True].copy() if "Select" in edited.columns else pd.DataFrame()
+                        selected_groups = selected_rows["Channel Groups"].tolist() if not selected_rows.empty else []
+                        if do_apply_bulk and selected_groups:
+                            new_overrides = dict(st.session_state["bid_overrides"])
+                            for cg in selected_groups:
+                                new_overrides[f"{selected_state}|{cg}"] = {"apply": True, "adj": float(bulk_adj)}
+                            st.session_state["bid_overrides"] = new_overrides
+                            st.rerun()
+                        if do_revert_bulk and selected_groups:
+                            new_overrides = dict(st.session_state["bid_overrides"])
+                            for cg in selected_groups:
+                                new_overrides.pop(f"{selected_state}|{cg}", None)
+                            st.session_state["bid_overrides"] = new_overrides
+                            st.rerun()
 
                         new_overrides = dict(st.session_state["bid_overrides"])
                         for _, rr in edited.iterrows():
@@ -2353,16 +2351,6 @@ def main() -> None:
                                 "state": selected_state,
                                 "channel": explore_channels[0],
                             }
-                        quick_col1, quick_col2 = st.columns([3, 1])
-                        quick_channel = quick_col1.selectbox(
-                            "Open popup by channel group name",
-                            options=table_df["Channel Groups"].tolist(),
-                            key=f"tab1_explore_quick_channel_{selected_state}",
-                        )
-                        if quick_col2.button("Open Popup", key=f"tab1_explore_open_{selected_state}"):
-                            st.session_state["tab1_explore_target"] = {"state": selected_state, "channel": quick_channel}
-                            st.rerun()
-
                         target = st.session_state.get("tab1_explore_target")
                         if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
                             ch_sel = str(target.get("channel"))
