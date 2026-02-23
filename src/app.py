@@ -1996,6 +1996,16 @@ def main() -> None:
             key="tab1_state_popup",
         )
         st.session_state["selected_state_map"] = selected_state
+        all_overrides = st.session_state.get("bid_overrides", {})
+        active_global = sum(
+            1 for v in all_overrides.values() if isinstance(v, dict) and v.get("apply", False)
+        )
+        active_state = sum(
+            1
+            for k, v in all_overrides.items()
+            if isinstance(v, dict) and v.get("apply", False) and str(k).startswith(f"{selected_state}|")
+        )
+        st.caption(f"Manual Overrides Active: {active_state} in {selected_state} | {active_global} total")
 
         if selected_state:
             row = map_df[map_df["State"] == selected_state].head(1)
