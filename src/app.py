@@ -2506,6 +2506,7 @@ def main() -> None:
                                 allow_unsafe_jscode=True,
                                 update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
                                 fit_columns_on_grid_load=True,
+                                reload_data=True,
                                 height=420,
                                 theme="balham-dark" if dark_mode else "balham",
                                 custom_css=custom_css,
@@ -2626,6 +2627,7 @@ def main() -> None:
                                                     "adj": float(cr["Bid Adj %"]),
                                                 }
                                                 st.session_state["bid_overrides"] = new_overrides
+                                                st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                                                 st.session_state["tab1_explore_target"] = None
                                                 st.rerun()
                                 if st.button("Close", key=f"tab1_explore_close_done_{selected_state}_{ch_sel}"):
