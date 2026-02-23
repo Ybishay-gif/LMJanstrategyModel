@@ -2424,6 +2424,36 @@ def main() -> None:
                                 }
                                 """
                             )
+                            selected_adj_renderer = JsCode(
+                                """
+                                class SelectedAdjRenderer {
+                                  init(params) {
+                                    const v = params.value;
+                                    const txt = (v === null || v === undefined || v === '') ? '' : ((Number(v) >= 0 ? '+' : '') + Number(v).toFixed(0) + '%');
+                                    const isManual = (params.data && params.data['Selection Source'] === 'Manual');
+                                    this.eGui = document.createElement('div');
+                                    this.eGui.style.display = 'flex';
+                                    this.eGui.style.alignItems = 'center';
+                                    this.eGui.style.gap = '6px';
+                                    const t = document.createElement('span');
+                                    t.innerText = txt;
+                                    this.eGui.appendChild(t);
+                                    if (isManual) {
+                                      const b = document.createElement('span');
+                                      b.innerText = 'Manual';
+                                      b.style.fontSize = '10px';
+                                      b.style.padding = '1px 6px';
+                                      b.style.borderRadius = '10px';
+                                      b.style.border = '1px solid #22c55e';
+                                      b.style.color = '#86efac';
+                                      b.style.background = 'rgba(34,197,94,0.12)';
+                                      this.eGui.appendChild(b);
+                                    }
+                                  }
+                                  getGui() { return this.eGui; }
+                                }
+                                """
+                            )
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_selection("multiple", use_checkbox=True)
@@ -2436,7 +2466,7 @@ def main() -> None:
                             gb.configure_column("Win Rate", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
                             gb.configure_column("Total Cost", editable=False, width=108, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
-                            gb.configure_column("Selected Price Adj.", editable=False, width=114, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Selected Price Adj.", editable=False, width=140, cellRenderer=selected_adj_renderer)
                             gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=60)
                             gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=116, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
