@@ -1368,7 +1368,8 @@ def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, 
 def parse_adj_from_label(label: str) -> Optional[float]:
     if not isinstance(label, str):
         return None
-    m = re.match(r"\s*([+-]?\d+(?:\.\d+)?)%\s*:", label)
+    # Accept labels with optional UI prefix (e.g. "▼ +10%: ...").
+    m = re.search(r"([+-]?\d+(?:\.\d+)?)\s*%", label)
     if not m:
         return None
     try:
@@ -2597,9 +2598,13 @@ def main() -> None:
                         for i, rr in edited.iterrows():
                             adj = parse_adj_from_label(rr.get("Adj Selection", ""))
                             if adj is not None:
+                                rec_adj = float(rr.get("Rec Bid Adj", 0.0) or 0.0)
                                 edited.at[i, "Selected Price Adj"] = float(adj)
-                                edited.at[i, "Selection Source"] = "Manual adjustment"
-                                edited.at[i, "Apply"] = True
+                                if abs(float(adj) - rec_adj) > 1e-9:
+                                    edited.at[i, "Selection Source"] = "Manual adjustment"
+                                    edited.at[i, "Apply"] = True
+                                elif not bool(rr.get("Apply", False)):
+                                    edited.at[i, "Selection Source"] = "Suggested"
                         st.session_state[draft_key] = edited
                         selected_rows = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
                         if not selected_rows.empty:
@@ -2634,23 +2639,30 @@ def main() -> None:
                             st.session_state[draft_key] = edited
                             st.rerun()
                         if do_save:
-                            new_overrides = dict(st.session_state["bid_overrides"])
+                            prev_overrides = dict(st.session_state.get("bid_overrides", {}))
+                            new_overrides = dict(prev_overrides)
                             changed_rows = 0
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
                                 adj_from_dropdown = parse_adj_from_label(rr.get("Adj Selection", ""))
-                                if adj_from_dropdown is not None:
+                                rec_adj = float(rr.get("Rec Bid Adj", 0.0) or 0.0)
+                                if adj_from_dropdown is not None and abs(float(adj_from_dropdown) - rec_adj) > 1e-9:
                                     new_overrides[okey] = {"apply": True, "adj": float(adj_from_dropdown)}
-                                    changed_rows += 1
                                 elif bool(rr.get("Apply", False)):
                                     new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj", 0.0))}
-                                    changed_rows += 1
                                 else:
                                     new_overrides.pop(okey, None)
+                            changed_keys = set(prev_overrides.keys()) ^ set(new_overrides.keys())
+                            for k in set(prev_overrides.keys()) & set(new_overrides.keys()):
+                                a = prev_overrides.get(k, {})
+                                b = new_overrides.get(k, {})
+                                if bool(a.get("apply", False)) != bool(b.get("apply", False)) or abs(float(a.get("adj", 0.0)) - float(b.get("adj", 0.0))) > 1e-9:
+                                    changed_keys.add(k)
+                            changed_rows = len(changed_keys)
                             with st.spinner("Saving adjustments and recalculating..."):
                                 st.session_state["bid_overrides"] = new_overrides
                                 save_overrides_to_disk(new_overrides)
-                                time.sleep(0.35)
+                                time.sleep(0.9)
                             st.session_state["tab1_save_notice"] = f"Saved {changed_rows} manual adjustments."
                             st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                             st.rerun()
