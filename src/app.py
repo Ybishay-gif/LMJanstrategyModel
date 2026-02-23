@@ -1,5 +1,6 @@
 import re
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,7 @@ DEFAULT_PATHS = {
     "channel_price_exp": "data/channel_price_exploration.csv",
     "channel_state": "data/channel_group_state.csv",
 }
+OVERRIDES_PATH = Path("data/manual_overrides.json")
 
 STRATEGY_SCALE = {
     "Strongest Momentum": 1.00,
@@ -1374,6 +1376,31 @@ def parse_adj_from_label(label: str) -> float | None:
         return None
 
 
+def load_overrides_from_disk() -> dict:
+    try:
+        if not OVERRIDES_PATH.exists():
+            return {}
+        data = json.loads(OVERRIDES_PATH.read_text())
+        if isinstance(data, dict):
+            out = {}
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    out[str(k)] = {"apply": bool(v.get("apply", False)), "adj": float(v.get("adj", 0.0))}
+            return out
+    except Exception:
+        return {}
+    return {}
+
+
+def save_overrides_to_disk(overrides: dict) -> None:
+    try:
+        OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OVERRIDES_PATH.write_text(json.dumps(overrides, indent=2))
+    except Exception:
+        # Best-effort persistence; app still works with session state only.
+        pass
+
+
 def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
     if not overrides:
         return rec_df
@@ -1853,7 +1880,7 @@ def main() -> None:
         state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
     )
     if "bid_overrides" not in st.session_state:
-        st.session_state["bid_overrides"] = {}
+        st.session_state["bid_overrides"] = load_overrides_from_disk()
     rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
     state_extra_df, state_seg_extra_df, channel_summary_df = summarize_from_rec(rec_df)
 
@@ -2455,6 +2482,10 @@ def main() -> None:
                         selected_groups: list[str] = []
                         edited = grid_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
+                        prev = st.session_state.get(draft_key)
+                        if isinstance(prev, pd.DataFrame) and "Channel Groups" in prev.columns:
+                            if set(prev["Channel Groups"].astype(str)) == set(edited["Channel Groups"].astype(str)):
+                                edited = prev.copy()
                         if AGGRID_AVAILABLE:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
@@ -2516,7 +2547,7 @@ def main() -> None:
                                 allow_unsafe_jscode=True,
                                 update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
                                 fit_columns_on_grid_load=True,
-                                reload_data=True,
+                                reload_data=False,
                                 height=460,
                                 theme="balham-dark",
                                 custom_css=custom_css,
@@ -2603,19 +2634,28 @@ def main() -> None:
                             st.rerun()
                         if do_save:
                             new_overrides = dict(st.session_state["bid_overrides"])
+                            changed_rows = 0
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
                                 adj_from_dropdown = parse_adj_from_label(rr.get("Adj Selection", ""))
                                 if adj_from_dropdown is not None:
                                     new_overrides[okey] = {"apply": True, "adj": float(adj_from_dropdown)}
+                                    changed_rows += 1
                                 elif bool(rr.get("Apply", False)):
                                     new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj", 0.0))}
+                                    changed_rows += 1
                                 else:
                                     new_overrides.pop(okey, None)
-                            st.session_state["bid_overrides"] = new_overrides
+                            with st.spinner("Saving adjustments and recalculating..."):
+                                st.session_state["bid_overrides"] = new_overrides
+                                save_overrides_to_disk(new_overrides)
+                                time.sleep(0.35)
+                            st.session_state["tab1_save_notice"] = f"Saved {changed_rows} manual adjustments."
                             st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                             st.rerun()
 
+                        if st.session_state.get("tab1_save_notice"):
+                            st.success(st.session_state.pop("tab1_save_notice"))
                         st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
 
         st.markdown("**State Strategy vs Actual Indicator**")
