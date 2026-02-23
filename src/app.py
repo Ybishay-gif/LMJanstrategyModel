@@ -1330,6 +1330,29 @@ def build_popup_card_options(
     return pd.DataFrame(out_rows), source_used
 
 
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
+def precompute_popup_options_for_state(
+    rec_df: pd.DataFrame,
+    price_eval_df: pd.DataFrame,
+    state: str,
+    settings: Settings,
+) -> pd.DataFrame:
+    s = rec_df[rec_df["State"] == state]
+    channels = sorted(s["Channel Groups"].dropna().unique().tolist())
+    rows = []
+    for ch in channels:
+        p, src = build_popup_card_options(rec_df, price_eval_df, state, ch, settings)
+        if p.empty:
+            continue
+        p = p.copy()
+        p["Channel Groups"] = ch
+        p["Source Used"] = src
+        rows.append(p)
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True)
+
+
 def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
     if not overrides:
         return rec_df
@@ -2350,7 +2373,6 @@ def main() -> None:
                         )
                         cg_state_cols = [
                             "Channel Groups",
-                            "Binds",
                             "Bids",
                             "SOV",
                             "Clicks",
@@ -2363,6 +2385,7 @@ def main() -> None:
                             "Expected Additional Binds",
                             "CPC Lift %",
                         ]
+                        cg_state_cols = [c for c in cg_state_cols if c in cg_state.columns]
                         table_df = cg_state[cg_state_cols].copy()
                         table_df["Selected Bid Adj."] = table_df["Rec. Bid Adj."]
                         table_df["Apply"] = False
@@ -2536,10 +2559,15 @@ def main() -> None:
                             st.rerun()
 
                         st.caption("Click the row `🔎` button to open popup. Use Save once for multiple row updates.")
+                        popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         target = st.session_state.get("tab1_explore_target")
                         if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
                             ch_sel = str(target.get("channel"))
-                            popup_df, source_used = build_popup_card_options(rec_df, price_eval, selected_state, ch_sel, settings)
+                            if not popup_state_df.empty:
+                                popup_df = popup_state_df[popup_state_df["Channel Groups"] == ch_sel].copy()
+                                source_used = popup_df["Source Used"].iloc[0] if not popup_df.empty else "None"
+                            else:
+                                popup_df, source_used = build_popup_card_options(rec_df, price_eval, selected_state, ch_sel, settings)
 
                             def render_alternative_cards() -> None:
                                 st.caption(f"Adjustment source: {source_used}")
