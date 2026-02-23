@@ -290,11 +290,13 @@ def strategy_max_adjustment(bucket: str, settings: Settings) -> float:
 
 
 def apply_price_effects(
-    rec: pd.DataFrame, price_eval_df: pd.DataFrame
+    rec: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings
 ) -> pd.DataFrame:
     px = price_eval_df.copy()
     if "Stat Sig Price Point" in px.columns:
         px = px[px["Stat Sig Price Point"] == True]
+    if "CPC Lift %" in px.columns:
+        px = px[px["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0]
     effects = (
         px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
@@ -657,7 +659,7 @@ def build_model_tables(
     rec.loc[growth_lane, "Suggested Price Adjustment %"] = np.maximum(rec["Suggested Price Adjustment %"], 20)
     rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
 
-    rec = apply_price_effects(rec, price_eval_df)
+    rec = apply_price_effects(rec, price_eval_df, settings)
     rec["Clicks Lift %"] = rec["Clicks Lift %"].fillna(0)
     rec["Win Rate Lift %"] = rec["Win Rate Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
@@ -884,10 +886,12 @@ def render_formatted_table(df: pd.DataFrame, use_container_width: bool = True):
             raise
 
 
-def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str) -> pd.DataFrame:
+def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjustment_col: str, settings: Settings) -> pd.DataFrame:
     px = price_eval_df.copy()
     if "Stat Sig Price Point" in px.columns:
         px = px[px["Stat Sig Price Point"] == True]
+    if "CPC Lift %" in px.columns:
+        px = px[px["CPC Lift %"].fillna(0) <= settings.max_cpc_increase_pct / 100.0]
     effects = (
         px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
         .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
@@ -1588,7 +1592,7 @@ def main() -> None:
                         state_channels["Scenario Target Adj %"] = np.minimum(
                             state_channels["Scenario Target Adj %"], state_channels["Strategy Max Adj %"]
                         )
-                        state_channels = apply_scenario_effects(state_channels, price_eval, "Scenario Target Adj %")
+                        state_channels = apply_scenario_effects(state_channels, price_eval, "Scenario Target Adj %", settings)
                         state_channels["Scenario Lift Proxy %"] = state_channels["Scenario Lift Proxy %"].clip(lower=0)
                         state_channels["Expected Additional Clicks"] = state_channels["Clicks"] * state_channels["Scenario Lift Proxy %"]
                         state_channels["Expected Additional Binds"] = (
@@ -1703,7 +1707,7 @@ def main() -> None:
         scen = filt.copy()
         scen["Scenario Target Adj %"] = scen["Applied Price Adjustment %"] * aggr_factor
         scen["Scenario Target Adj %"] = np.minimum(scen["Scenario Target Adj %"], scen["Strategy Max Adj %"])
-        scen = apply_scenario_effects(scen, price_eval, "Scenario Target Adj %")
+        scen = apply_scenario_effects(scen, price_eval, "Scenario Target Adj %", settings)
         scen["Scenario Lift Proxy %"] = scen["Scenario Lift Proxy %"].clip(lower=0)
 
         scen["Additional Clicks (scenario)"] = scen["Clicks"] * scen["Scenario Lift Proxy %"]
