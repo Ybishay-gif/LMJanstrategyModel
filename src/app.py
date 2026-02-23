@@ -1233,6 +1233,7 @@ def stat_sig_level(bids: float, clicks: float, settings: Settings) -> tuple[str,
     return ("Weak", "🔴", score)
 
 
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
 def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel_group: str, settings: Settings) -> tuple[pd.DataFrame, str]:
     p = price_eval_df.copy()
     p = p[p["Channel Groups"] == channel_group].copy()
@@ -1595,6 +1596,7 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
 def main() -> None:
     with st.sidebar:
         dark_mode = st.toggle("Dark mode", value=True)
+        fast_mode = st.toggle("Fast interaction mode", value=True, help="Reduces heavy chart rendering for faster clicks/saves.")
     st.markdown(DARK_CSS if dark_mode else LIGHT_CSS, unsafe_allow_html=True)
 
     plotly_template = "plotly_dark" if dark_mode else "plotly_white"
@@ -1870,59 +1872,62 @@ def main() -> None:
         fig0.update_layout(margin=dict(l=0, r=0, t=40, b=0), template=plotly_template)
         st.plotly_chart(fig0, use_container_width=True, key="state_map_tab0")
 
-        st.markdown("**Product Strategy Sections**")
-        for strat in [s for s in STRATEGY_COLOR.keys() if s in map_df0["Strategy Bucket"].dropna().unique().tolist()]:
-            st_sec = state_df[state_df["Strategy Bucket"] == strat]
-            rec_sec = sim_all[sim_all["Strategy Bucket"] == strat]
-            if st_sec.empty:
-                continue
-            states_txt = ", ".join(sorted(st_sec["State"].dropna().unique().tolist()))
-            s_clicks = float(pd.to_numeric(st_sec["Clicks"], errors="coerce").fillna(0).sum())
-            s_binds = float(pd.to_numeric(st_sec["Binds"], errors="coerce").fillna(0).sum())
-            s_bids = float(pd.to_numeric(rec_sec["Bids"], errors="coerce").fillna(0).sum())
-            s_clicks_ch = float(pd.to_numeric(rec_sec["Clicks"], errors="coerce").fillna(0).sum())
-            s_wr = (s_clicks_ch / s_bids) if s_bids > 0 else np.nan
-            s_cost = float(pd.to_numeric(rec_sec["Current Cost Sim"], errors="coerce").fillna(0).sum())
-            s_cpb = (s_cost / s_binds) if s_binds > 0 else np.nan
-            s_roe = _safe_weighted_mean(st_sec["ROE"], st_sec["Binds"])
-            s_cr = _safe_weighted_mean(st_sec["Combined Ratio"], st_sec["Binds"])
-            s_ltv = _safe_weighted_mean(st_sec["Avg. MRLTV"], st_sec["Binds"])
-            s_add_clicks = float(pd.to_numeric(rec_sec["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
-            s_add_binds = float(pd.to_numeric(rec_sec["Expected Additional Binds"], errors="coerce").fillna(0).sum())
-            s_add_budget = float(pd.to_numeric(rec_sec["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
+        if not fast_mode:
+            st.markdown("**Product Strategy Sections**")
+            for strat in [s for s in STRATEGY_COLOR.keys() if s in map_df0["Strategy Bucket"].dropna().unique().tolist()]:
+                st_sec = state_df[state_df["Strategy Bucket"] == strat]
+                rec_sec = sim_all[sim_all["Strategy Bucket"] == strat]
+                if st_sec.empty:
+                    continue
+                states_txt = ", ".join(sorted(st_sec["State"].dropna().unique().tolist()))
+                s_clicks = float(pd.to_numeric(st_sec["Clicks"], errors="coerce").fillna(0).sum())
+                s_binds = float(pd.to_numeric(st_sec["Binds"], errors="coerce").fillna(0).sum())
+                s_bids = float(pd.to_numeric(rec_sec["Bids"], errors="coerce").fillna(0).sum())
+                s_clicks_ch = float(pd.to_numeric(rec_sec["Clicks"], errors="coerce").fillna(0).sum())
+                s_wr = (s_clicks_ch / s_bids) if s_bids > 0 else np.nan
+                s_cost = float(pd.to_numeric(rec_sec["Current Cost Sim"], errors="coerce").fillna(0).sum())
+                s_cpb = (s_cost / s_binds) if s_binds > 0 else np.nan
+                s_roe = _safe_weighted_mean(st_sec["ROE"], st_sec["Binds"])
+                s_cr = _safe_weighted_mean(st_sec["Combined Ratio"], st_sec["Binds"])
+                s_ltv = _safe_weighted_mean(st_sec["Avg. MRLTV"], st_sec["Binds"])
+                s_add_clicks = float(pd.to_numeric(rec_sec["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
+                s_add_binds = float(pd.to_numeric(rec_sec["Expected Additional Binds"], errors="coerce").fillna(0).sum())
+                s_add_budget = float(pd.to_numeric(rec_sec["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
 
-            with st.container(border=True):
-                st.markdown(f"**{strat}**")
-                st.caption(f"States: {states_txt}")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Clicks", f"{s_clicks:,.0f}")
-                c2.metric("Cost", f"${s_cost:,.0f}")
-                c3.metric("Win Rate", "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}")
-                c4.metric("Binds", f"{s_binds:,.0f}")
-                c5.metric("CPB", "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}")
-                c6, c7, c8 = st.columns(3)
-                c6.metric("ROE", "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}")
-                c7.metric("LTV", "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}")
-                c8.metric("Combined Ratio", "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}")
-                c9, c10, c11 = st.columns(3)
-                c9.metric("Additional Clicks", f"{s_add_clicks:,.0f}")
-                c10.metric("Additional Binds", f"{s_add_binds:,.1f}")
-                c11.metric("Required Budget", f"${s_add_budget:,.0f}")
+                with st.container(border=True):
+                    st.markdown(f"**{strat}**")
+                    st.caption(f"States: {states_txt}")
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric("Clicks", f"{s_clicks:,.0f}")
+                    c2.metric("Cost", f"${s_cost:,.0f}")
+                    c3.metric("Win Rate", "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}")
+                    c4.metric("Binds", f"{s_binds:,.0f}")
+                    c5.metric("CPB", "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}")
+                    c6, c7, c8 = st.columns(3)
+                    c6.metric("ROE", "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}")
+                    c7.metric("LTV", "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}")
+                    c8.metric("Combined Ratio", "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}")
+                    c9, c10, c11 = st.columns(3)
+                    c9.metric("Additional Clicks", f"{s_add_clicks:,.0f}")
+                    c10.metric("Additional Binds", f"{s_add_binds:,.1f}")
+                    c11.metric("Required Budget", f"${s_add_budget:,.0f}")
 
-                seg_tbl = rec_sec.groupby("Segment", as_index=False).agg(
-                    Clicks=("Clicks", "sum"),
-                    Bids=("Bids", "sum"),
-                    Cost=("Current Cost Sim", "sum"),
-                    Binds=("Binds", "sum"),
-                    ROE=("ROE Proxy", "mean"),
-                    Combined_Ratio=("CR Proxy", "mean"),
-                    LTV=("MRLTV Proxy", "mean"),
-                )
-                seg_tbl["Win Rate"] = np.where(seg_tbl["Bids"] > 0, seg_tbl["Clicks"] / seg_tbl["Bids"], np.nan)
-                seg_tbl["CPB"] = np.where(seg_tbl["Binds"] > 0, seg_tbl["Cost"] / seg_tbl["Binds"], np.nan)
-                seg_tbl = seg_tbl[["Segment", "Clicks", "Cost", "Win Rate", "Binds", "CPB", "ROE", "LTV", "Combined_Ratio"]]
-                seg_tbl = seg_tbl.rename(columns={"Combined_Ratio": "Combined Ratio"})
-                render_formatted_table(seg_tbl, use_container_width=True)
+                    seg_tbl = rec_sec.groupby("Segment", as_index=False).agg(
+                        Clicks=("Clicks", "sum"),
+                        Bids=("Bids", "sum"),
+                        Cost=("Current Cost Sim", "sum"),
+                        Binds=("Binds", "sum"),
+                        ROE=("ROE Proxy", "mean"),
+                        Combined_Ratio=("CR Proxy", "mean"),
+                        LTV=("MRLTV Proxy", "mean"),
+                    )
+                    seg_tbl["Win Rate"] = np.where(seg_tbl["Bids"] > 0, seg_tbl["Clicks"] / seg_tbl["Bids"], np.nan)
+                    seg_tbl["CPB"] = np.where(seg_tbl["Binds"] > 0, seg_tbl["Cost"] / seg_tbl["Binds"], np.nan)
+                    seg_tbl = seg_tbl[["Segment", "Clicks", "Cost", "Win Rate", "Binds", "CPB", "ROE", "LTV", "Combined_Ratio"]]
+                    seg_tbl = seg_tbl.rename(columns={"Combined_Ratio": "Combined Ratio"})
+                    render_formatted_table(seg_tbl, use_container_width=True)
+        else:
+            st.caption("Fast mode on: product strategy section collapsed for faster interactions.")
 
     with tabs[1]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
@@ -1950,37 +1955,40 @@ def main() -> None:
         )
         map_df.loc[~map_df["Conflict Perf Label"].isin(CONFLICT_PERF_COLOR.keys()), "Conflict Perf Label"] = "Unknown | Unknown"
 
-        st.markdown("**Neon Summary Charts**")
-        t1c1, t1c2, t1c3, t1c4 = st.columns(4)
-        strat_mix = rec_df.groupby("Strategy Bucket", as_index=False)["Bids"].sum().sort_values("Bids", ascending=False)
-        if not strat_mix.empty:
-            fig_t1_strat = px.pie(
-                strat_mix,
-                names="Strategy Bucket",
-                values="Bids",
-                hole=0.65,
-                color="Strategy Bucket",
-                color_discrete_map=STRATEGY_COLOR,
-                template=plotly_template,
-                title="Strategy Mix",
-            )
-            fig_t1_strat.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-            t1c1.plotly_chart(fig_t1_strat, use_container_width=True, key="tab1_strat_mix")
-        seg_mix = rec_df.groupby("Segment", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
-        fig_t1_seg = px.bar(seg_mix, x="Segment", y="Clicks", template=plotly_template, title="Clicks by Segment")
-        fig_t1_seg.update_traces(marker_color="#60a5fa")
-        fig_t1_seg.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-        t1c2.plotly_chart(fig_t1_seg, use_container_width=True, key="tab1_seg_mix")
-        top_growth_states = map_df[["State", "Expected_Additional_Clicks"]].sort_values("Expected_Additional_Clicks", ascending=False).head(8)
-        fig_t1_state_g = px.bar(top_growth_states, x="State", y="Expected_Additional_Clicks", template=plotly_template, title="Top Growth States")
-        fig_t1_state_g.update_traces(marker_color="#34d399")
-        fig_t1_state_g.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-        t1c3.plotly_chart(fig_t1_state_g, use_container_width=True, key="tab1_state_growth")
-        top_channels = rec_df.groupby("Channel Groups", as_index=False)["Expected Additional Binds"].sum().sort_values("Expected Additional Binds", ascending=False).head(8)
-        fig_t1_ch = px.bar(top_channels, x="Channel Groups", y="Expected Additional Binds", template=plotly_template, title="Top Growth Channels")
-        fig_t1_ch.update_traces(marker_color="#22d3ee")
-        fig_t1_ch.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-        t1c4.plotly_chart(fig_t1_ch, use_container_width=True, key="tab1_channel_growth")
+        if not fast_mode:
+            st.markdown("**Neon Summary Charts**")
+            t1c1, t1c2, t1c3, t1c4 = st.columns(4)
+            strat_mix = rec_df.groupby("Strategy Bucket", as_index=False)["Bids"].sum().sort_values("Bids", ascending=False)
+            if not strat_mix.empty:
+                fig_t1_strat = px.pie(
+                    strat_mix,
+                    names="Strategy Bucket",
+                    values="Bids",
+                    hole=0.65,
+                    color="Strategy Bucket",
+                    color_discrete_map=STRATEGY_COLOR,
+                    template=plotly_template,
+                    title="Strategy Mix",
+                )
+                fig_t1_strat.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+                t1c1.plotly_chart(fig_t1_strat, use_container_width=True, key="tab1_strat_mix")
+            seg_mix = rec_df.groupby("Segment", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
+            fig_t1_seg = px.bar(seg_mix, x="Segment", y="Clicks", template=plotly_template, title="Clicks by Segment")
+            fig_t1_seg.update_traces(marker_color="#60a5fa")
+            fig_t1_seg.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+            t1c2.plotly_chart(fig_t1_seg, use_container_width=True, key="tab1_seg_mix")
+            top_growth_states = map_df[["State", "Expected_Additional_Clicks"]].sort_values("Expected_Additional_Clicks", ascending=False).head(8)
+            fig_t1_state_g = px.bar(top_growth_states, x="State", y="Expected_Additional_Clicks", template=plotly_template, title="Top Growth States")
+            fig_t1_state_g.update_traces(marker_color="#34d399")
+            fig_t1_state_g.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+            t1c3.plotly_chart(fig_t1_state_g, use_container_width=True, key="tab1_state_growth")
+            top_channels = rec_df.groupby("Channel Groups", as_index=False)["Expected Additional Binds"].sum().sort_values("Expected Additional Binds", ascending=False).head(8)
+            fig_t1_ch = px.bar(top_channels, x="Channel Groups", y="Expected Additional Binds", template=plotly_template, title="Top Growth Channels")
+            fig_t1_ch.update_traces(marker_color="#22d3ee")
+            fig_t1_ch.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+            t1c4.plotly_chart(fig_t1_ch, use_container_width=True, key="tab1_channel_growth")
+        else:
+            st.caption("Fast mode on: extra Tab 1 charts are hidden for speed.")
 
         map_mode = st.radio(
             "Map color mode",
@@ -2694,148 +2702,86 @@ def main() -> None:
     with tabs[4]:
         st.subheader("🌌 Neon Insights Cockpit")
         st.caption("Futuristic overview of growth, intent, performance, and strategy using current model outputs.")
-
-        map_dfn = state_df.merge(state_extra_df, on="State", how="left")
-        map_dfn["Expected_Additional_Clicks"] = map_dfn["Expected_Additional_Clicks"].fillna(0)
-        map_dfn["Expected_Additional_Binds"] = map_dfn["Expected_Additional_Binds"].fillna(0)
-        map_dfn["ROE Display"] = map_dfn["ROE"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
-        map_dfn["CR Display"] = map_dfn["Combined Ratio"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
-        map_dfn["LTV Display"] = map_dfn["Avg. MRLTV"].map(lambda x: "n/a" if pd.isna(x) else f"${x:,.0f}")
-        map_dfn["Binds Display"] = map_dfn["Binds"].map(lambda x: "n/a" if pd.isna(x) else f"{x:,.0f}")
-        map_dfn["Add Clicks Display"] = map_dfn["Expected_Additional_Clicks"].map(lambda x: f"{x:,.0f}")
-        map_dfn["Add Binds Display"] = map_dfn["Expected_Additional_Binds"].map(lambda x: f"{x:,.1f}")
-        map_dfn["Conflict Perf Label"] = (
-            map_dfn["Performance Tone"].fillna("Unknown").astype(str)
-            + " | "
-            + map_dfn["Conflict Level"].fillna("Unknown").astype(str)
-        )
-        map_dfn.loc[~map_dfn["Conflict Perf Label"].isin(CONFLICT_PERF_COLOR.keys()), "Conflict Perf Label"] = "Unknown | Unknown"
-
-        total_clicks_n = float(pd.to_numeric(state_df["Clicks"], errors="coerce").fillna(0).sum())
-        total_binds_n = float(pd.to_numeric(state_df["Binds"], errors="coerce").fillna(0).sum())
-        total_cost_n = float(pd.to_numeric(rec_df["Clicks"] * rec_df["Avg. CPC"], errors="coerce").fillna(0).sum())
-        add_clicks_n = float(pd.to_numeric(rec_df["Expected Additional Clicks"], errors="coerce").fillna(0).sum())
-        add_binds_n = float(pd.to_numeric(rec_df["Expected Additional Binds"], errors="coerce").fillna(0).sum())
-        add_budget_n = float(pd.to_numeric(rec_df["Expected Additional Cost"], errors="coerce").fillna(0).sum())
-        total_bids_n = float(pd.to_numeric(rec_df["Bids"], errors="coerce").fillna(0).sum())
-        total_clicks_ch_n = float(pd.to_numeric(rec_df["Clicks"], errors="coerce").fillna(0).sum())
-        avg_wr_n = (total_clicks_ch_n / total_bids_n) if total_bids_n > 0 else np.nan
-        cpb_n = (total_cost_n / total_binds_n) if total_binds_n > 0 else np.nan
-
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("Total Clicks", f"{total_clicks_n:,.0f}")
-        m2.metric("Binds", f"{total_binds_n:,.0f}")
-        m3.metric("Avg Win Rate", "n/a" if pd.isna(avg_wr_n) else f"{avg_wr_n:.1%}")
-        m4.metric("Current Cost", f"${total_cost_n:,.0f}")
-        m5.metric("Additional Clicks", f"{add_clicks_n:,.0f}")
-        m6.metric("Additional Binds", f"{add_binds_n:,.1f}")
-        m7, m8, m9 = st.columns(3)
-        m7.metric("Additional Budget Needed", f"${add_budget_n:,.0f}")
-        m8.metric("CPB", "n/a" if pd.isna(cpb_n) else f"${cpb_n:,.0f}")
-        m9.metric("ROE (weighted)", "n/a" if pd.isna(_safe_weighted_mean(state_df["ROE"], state_df["Binds"])) else f"{_safe_weighted_mean(state_df['ROE'], state_df['Binds']):.1%}")
-
-        neon_mode = st.radio(
-            "Map color mode",
-            options=["Product Strategy", "Performance Group", "Conflict Highlight"],
-            horizontal=True,
-            key="tab4_map_mode",
-        )
-        if neon_mode == "Product Strategy":
-            neon_color_col, neon_color_map = "Strategy Bucket", STRATEGY_COLOR
-        elif neon_mode == "Performance Group":
-            neon_color_col, neon_color_map = "ROE Performance Group", PERFORMANCE_GROUP_COLOR
+        if fast_mode:
+            st.info("Fast interaction mode is ON. Turn it OFF in the sidebar to render this heavy visual cockpit.")
         else:
-            neon_color_col, neon_color_map = "Conflict Perf Label", CONFLICT_PERF_COLOR
+            map_dfn = state_df.merge(state_extra_df, on="State", how="left")
+            map_dfn["Expected_Additional_Clicks"] = map_dfn["Expected_Additional_Clicks"].fillna(0)
+            map_dfn["Expected_Additional_Binds"] = map_dfn["Expected_Additional_Binds"].fillna(0)
+            map_dfn["ROE Display"] = map_dfn["ROE"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+            map_dfn["CR Display"] = map_dfn["Combined Ratio"].map(lambda x: "n/a" if pd.isna(x) else f"{x:.1%}")
+            map_dfn["LTV Display"] = map_dfn["Avg. MRLTV"].map(lambda x: "n/a" if pd.isna(x) else f"${x:,.0f}")
+            map_dfn["Binds Display"] = map_dfn["Binds"].map(lambda x: "n/a" if pd.isna(x) else f"{x:,.0f}")
+            map_dfn["Add Clicks Display"] = map_dfn["Expected_Additional_Clicks"].map(lambda x: f"{x:,.0f}")
+            map_dfn["Add Binds Display"] = map_dfn["Expected_Additional_Binds"].map(lambda x: f"{x:,.1f}")
+            map_dfn["Conflict Perf Label"] = (
+                map_dfn["Performance Tone"].fillna("Unknown").astype(str)
+                + " | "
+                + map_dfn["Conflict Level"].fillna("Unknown").astype(str)
+            )
+            map_dfn.loc[~map_dfn["Conflict Perf Label"].isin(CONFLICT_PERF_COLOR.keys()), "Conflict Perf Label"] = "Unknown | Unknown"
 
-        left, center, right = st.columns([1.1, 3.4, 1.1])
+            neon_mode = st.radio(
+                "Map color mode",
+                options=["Product Strategy", "Performance Group", "Conflict Highlight"],
+                horizontal=True,
+                key="tab4_map_mode",
+            )
+            if neon_mode == "Product Strategy":
+                neon_color_col, neon_color_map = "Strategy Bucket", STRATEGY_COLOR
+            elif neon_mode == "Performance Group":
+                neon_color_col, neon_color_map = "ROE Performance Group", PERFORMANCE_GROUP_COLOR
+            else:
+                neon_color_col, neon_color_map = "Conflict Perf Label", CONFLICT_PERF_COLOR
 
-        with left:
-            src = rec_df.groupby("Channel Groups", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
-            if not src.empty:
-                top_src = src.head(5).copy()
-                other = src["Clicks"].sum() - top_src["Clicks"].sum()
-                if other > 0:
-                    top_src = pd.concat([top_src, pd.DataFrame([{"Channel Groups": "Other", "Clicks": other}])], ignore_index=True)
-                fig_src = px.pie(
-                    top_src,
-                    names="Channel Groups",
-                    values="Clicks",
-                    hole=0.65,
-                    title="Top Data Sources",
+            left, center, right = st.columns([1.1, 3.4, 1.1])
+            with left:
+                src = rec_df.groupby("Channel Groups", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
+                if not src.empty:
+                    top_src = src.head(5).copy()
+                    other = src["Clicks"].sum() - top_src["Clicks"].sum()
+                    if other > 0:
+                        top_src = pd.concat([top_src, pd.DataFrame([{"Channel Groups": "Other", "Clicks": other}])], ignore_index=True)
+                    fig_src = px.pie(top_src, names="Channel Groups", values="Clicks", hole=0.65, title="Top Data Sources", template=plotly_template)
+                    fig_src.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+                    st.plotly_chart(fig_src, use_container_width=True, key="tab4_src")
+
+            with center:
+                fig_neon = px.choropleth(
+                    map_dfn,
+                    locations="State",
+                    locationmode="USA-states",
+                    scope="usa",
+                    color=neon_color_col,
+                    color_discrete_map=neon_color_map,
+                    custom_data=["ROE Display", "CR Display", "LTV Display", "Binds Display", "Add Clicks Display", "Add Binds Display"],
                     template=plotly_template,
                 )
-                fig_src.update_layout(
-                    margin=dict(l=0, r=0, t=35, b=0),
+                fig_neon.update_traces(
+                    marker_line_color="#38bdf8",
+                    marker_line_width=0.5,
+                    hovertemplate=(
+                        "<b>%{location}</b><br>"
+                        "ROE %{customdata[0]} | CR %{customdata[1]}<br>"
+                        "LTV %{customdata[2]} | Binds %{customdata[3]}<br>"
+                        "Add Clicks %{customdata[4]} | Add Binds %{customdata[5]}<extra></extra>"
+                    ),
+                )
+                fig_neon.update_geos(bgcolor="rgba(0,0,0,0)")
+                fig_neon.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(color="#dbeafe"),
+                    height=760,
                 )
-                st.plotly_chart(fig_src, use_container_width=True, key="tab4_src")
+                st.plotly_chart(fig_neon, use_container_width=True, key="tab4_map")
 
-            top_states = state_df.groupby("State", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False).head(6)
-            fig_states = px.bar(top_states, x="State", y="Clicks", title="Top States", template=plotly_template)
-            fig_states.update_traces(marker_color="#60a5fa")
-            fig_states.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-            st.plotly_chart(fig_states, use_container_width=True, key="tab4_states")
-
-            mix = rec_df.groupby("Strategy Bucket", as_index=False)["Bids"].sum().sort_values("Bids", ascending=False)
-            if not mix.empty:
-                fig_mix = px.pie(
-                    mix, names="Strategy Bucket", values="Bids", hole=0.72,
-                    color="Strategy Bucket", color_discrete_map=STRATEGY_COLOR, title="Strategy Mix (Bids)", template=plotly_template
-                )
-                fig_mix.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-                st.plotly_chart(fig_mix, use_container_width=True, key="tab4_mix")
-
-        with center:
-            fig_neon = px.choropleth(
-                map_dfn,
-                locations="State",
-                locationmode="USA-states",
-                scope="usa",
-                color=neon_color_col,
-                color_discrete_map=neon_color_map,
-                custom_data=["ROE Display", "CR Display", "LTV Display", "Binds Display", "Add Clicks Display", "Add Binds Display"],
-                template=plotly_template,
-            )
-            fig_neon.update_traces(
-                marker_line_color="#38bdf8",
-                marker_line_width=0.5,
-                hovertemplate=(
-                    "<b>%{location}</b><br>"
-                    "ROE %{customdata[0]} | CR %{customdata[1]}<br>"
-                    "LTV %{customdata[2]} | Binds %{customdata[3]}<br>"
-                    "Add Clicks %{customdata[4]} | Add Binds %{customdata[5]}<extra></extra>"
-                ),
-            )
-            fig_neon.update_geos(bgcolor="rgba(0,0,0,0)")
-            fig_neon.update_layout(
-                margin=dict(l=0, r=0, t=0, b=0),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#dbeafe"),
-                height=820,
-            )
-            st.plotly_chart(fig_neon, use_container_width=True, key="tab4_map")
-
-        with right:
-            seg = rec_df.groupby("Segment", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
-            fig_seg = px.treemap(seg, path=["Segment"], values="Clicks", title="Segments", template=plotly_template)
-            fig_seg.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-            st.plotly_chart(fig_seg, use_container_width=True, key="tab4_seg")
-
-            seg_intent = rec_df.groupby("Segment", as_index=False).agg(Clicks=("Clicks", "sum"), Binds=("Binds", "sum"))
-            seg_intent["Q2B"] = np.where(seg_intent["Clicks"] > 0, seg_intent["Binds"] / seg_intent["Clicks"], np.nan)
-            fig_intent = px.bar(seg_intent.sort_values("Q2B", ascending=False), x="Segment", y="Q2B", title="Intent by Segment (Q2B)", template=plotly_template)
-            fig_intent.update_traces(marker_color="#22d3ee")
-            fig_intent.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis_tickformat=".0%", font=dict(color="#dbeafe"))
-            st.plotly_chart(fig_intent, use_container_width=True, key="tab4_intent")
-
-            grow = rec_df.groupby("Channel Groups", as_index=False)["Expected Additional Binds"].sum().sort_values("Expected Additional Binds", ascending=False).head(8)
-            fig_grow = px.bar(grow, x="Channel Groups", y="Expected Additional Binds", title="Top Growth Lanes (Add Binds)", template=plotly_template)
-            fig_grow.update_traces(marker_color="#34d399")
-            fig_grow.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
-            st.plotly_chart(fig_grow, use_container_width=True, key="tab4_grow")
+            with right:
+                seg = rec_df.groupby("Segment", as_index=False)["Clicks"].sum().sort_values("Clicks", ascending=False)
+                fig_seg = px.treemap(seg, path=["Segment"], values="Clicks", title="Segments", template=plotly_template)
+                fig_seg.update_layout(margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#dbeafe"))
+                st.plotly_chart(fig_seg, use_container_width=True, key="tab4_seg")
 
 
 if __name__ == "__main__":
