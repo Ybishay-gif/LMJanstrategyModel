@@ -2378,8 +2378,6 @@ def main() -> None:
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
                         popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
-                        table_df["Explore"] = ""
-                        table_df["Open Popup"] = False
                         table_df["Adj Selection"] = ""
                         table_df["Adj Options"] = [[] for _ in range(len(table_df))]
                         for idx, rr in table_df.iterrows():
@@ -2421,7 +2419,6 @@ def main() -> None:
                                 "Rec. Bid Adj.",
                                 "Adj Selection",
                                 "Selected Price Adj.",
-                                "Explore",
                                 "Expected Total Cost",
                                 "Additional Budget Needed",
                                 "Expected Additional Clicks",
@@ -2429,7 +2426,6 @@ def main() -> None:
                                 "CPC Lift %",
                                 "Apply",
                                 "Selection Source",
-                                "Open Popup",
                                 "Adj Options",
                             ]
                         ]
@@ -2455,36 +2451,6 @@ def main() -> None:
                         draft_key = f"tab1_grid_draft_{selected_state}"
 
                         if AGGRID_AVAILABLE:
-                            button_renderer = JsCode(
-                                """
-                                class OpenBtnRenderer {
-                                  init(params) {
-                                    this.params = params;
-                                    this.eGui = document.createElement('div');
-                                    this.eGui.style.display = 'flex';
-                                    this.eGui.style.alignItems = 'center';
-                                    this.eGui.style.gap = '8px';
-                                    const btn = document.createElement('button');
-                                    btn.innerText = '🔎';
-                                    btn.style.cursor = 'pointer';
-                                    btn.style.border = '1px solid #334155';
-                                    btn.style.borderRadius = '8px';
-                                    btn.style.padding = '1px 6px';
-                                    btn.style.background = '#0f172a';
-                                    btn.style.color = '#e2e8f0';
-                                    btn.addEventListener('click', (e) => {
-                                      e.stopPropagation();
-                                      params.node.setDataValue('Open Popup', true);
-                                    });
-                                    const txt = document.createElement('span');
-                                    txt.innerText = params.value || '';
-                                    this.eGui.appendChild(btn);
-                                    this.eGui.appendChild(txt);
-                                  }
-                                  getGui() { return this.eGui; }
-                                }
-                                """
-                            )
                             selected_adj_renderer = JsCode(
                                 """
                                 class SelectedAdjRenderer {
@@ -2518,9 +2484,9 @@ def main() -> None:
                             )
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
+                            gb.configure_grid_options(singleClickEdit=True, stopEditingWhenCellsLoseFocus=True)
                             gb.configure_selection("multiple", use_checkbox=True)
                             gb.configure_column("Channel Groups", editable=False, pinned="left", width=178)
-                            gb.configure_column("Open Popup", hide=True)
                             gb.configure_column("Bids", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
                             gb.configure_column("SOV", editable=False, width=76, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Clicks", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
@@ -2532,7 +2498,7 @@ def main() -> None:
                                 "Adj Selection",
                                 editable=True,
                                 width=330,
-                                cellEditor="agRichSelectCellEditor",
+                                cellEditor="agSelectCellEditor",
                                 cellEditorParams=JsCode(
                                     """
                                     function(params) {
@@ -2542,7 +2508,6 @@ def main() -> None:
                                 ),
                             )
                             gb.configure_column("Selected Price Adj", headerName="Selected Price Adj.", editable=False, width=140, cellRenderer=selected_adj_renderer)
-                            gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=60)
                             gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=116, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="(value == null || isNaN(Number(value))) ? '0' : Math.round(Number(value)).toLocaleString()")
@@ -2591,15 +2556,6 @@ def main() -> None:
                             if not selected_rows.empty:
                                 selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
 
-                        # One-click row button opens popup.
-                        open_rows = edited[edited["Open Popup"] == True] if "Open Popup" in edited.columns else pd.DataFrame()
-                        if not open_rows.empty:
-                            ch_open = str(open_rows.iloc[0]["Channel Groups"])
-                            st.session_state["tab1_explore_target"] = {"state": selected_state, "channel": ch_open}
-                            st.session_state["tab1_last_explore_marker"] = f"{selected_state}|{ch_open}"
-                            edited["Open Popup"] = False
-                            st.session_state[draft_key] = edited
-
                         a1, a2, a3, a4 = st.columns([1.2, 1, 1, 1])
                         bulk_adj = a1.number_input(
                             "Set selected to bid adj %",
@@ -2643,75 +2599,7 @@ def main() -> None:
                             st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
                             st.rerun()
 
-                        st.caption("Click the row `🔎` button to open popup. Use Save once for multiple row updates.")
-                        target = st.session_state.get("tab1_explore_target")
-                        if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
-                            ch_sel = str(target.get("channel"))
-                            if not popup_state_df.empty:
-                                popup_df = popup_state_df[popup_state_df["Channel Groups"] == ch_sel].copy()
-                                source_used = popup_df["Source Used"].iloc[0] if not popup_df.empty else "None"
-                            else:
-                                popup_df, source_used = build_popup_card_options(rec_df, price_eval, selected_state, ch_sel, settings)
-
-                            def render_alternative_cards() -> None:
-                                st.caption(f"Adjustment source: {source_used}")
-                                if popup_df.empty:
-                                    st.info("No medium/strong stat-sig adjustment points under current guardrails.")
-                                    if st.button("Close", key=f"tab1_explore_close_{selected_state}_{ch_sel}"):
-                                        st.session_state["tab1_explore_target"] = None
-                                        st.session_state["tab1_last_explore_marker"] = None
-                                        st.rerun()
-                                    return
-
-                                chunks = [popup_df.iloc[i:i + 3] for i in range(0, len(popup_df), 3)]
-                                for bi, block in enumerate(chunks):
-                                    cols = st.columns(len(block))
-                                    for ci, (_, cr) in enumerate(block.iterrows()):
-                                        with cols[ci]:
-                                            wr_l = float(cr.get("Win Rate Uplift", 0) or 0)
-                                            cpc_l = float(cr.get("CPC Uplift", 0) or 0)
-                                            add_clicks = float(cr.get("Additional Clicks", 0) or 0)
-                                            add_binds = float(cr.get("Additional Binds", 0) or 0)
-                                            exp_cost = float(cr.get("Expected Total Cost", 0) or 0)
-                                            cpb_impact = cr.get("CPB Impact", np.nan)
-                                            card_html = (
-                                                f"<div class='alt-card'>"
-                                                f"<h5>{float(cr['Bid Adj %']):+.0f}%</h5>"
-                                                f"<div class='alt-kpi'>{cr.get('Sig Icon', '⚪')} {cr.get('Sig Level', 'n/a')} stat-sig | Bids {float(cr.get('Test Bids', 0)):,.0f}</div>"
-                                                f"<div class='alt-kpi'>Win Rate change: {wr_l:+.0%}</div>"
-                                                f"<div class='alt-kpi'>CPC uplift: {cpc_l:+.0%}</div>"
-                                                f"<div class='alt-kpi'>Potential additional binds: {add_binds:,.1f}</div>"
-                                                f"<div class='alt-kpi'>CPB impact: {'n/a' if pd.isna(cpb_impact) else f'{cpb_impact:+.0%}'}</div>"
-                                                f"</div>"
-                                            )
-                                            st.markdown(card_html, unsafe_allow_html=True)
-                                            if st.button(
-                                                f"Select {float(cr['Bid Adj %']):+.0f}%",
-                                                key=f"tab1_pick_adj_{selected_state}_{ch_sel}_{bi}_{ci}",
-                                                use_container_width=True,
-                                            ):
-                                                new_overrides = dict(st.session_state["bid_overrides"])
-                                                new_overrides[f"{selected_state}|{ch_sel}"] = {
-                                                    "apply": True,
-                                                    "adj": float(cr["Bid Adj %"]),
-                                                }
-                                                st.session_state["bid_overrides"] = new_overrides
-                                                st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
-                                                st.session_state["tab1_explore_target"] = None
-                                                st.rerun()
-                                if st.button("Close", key=f"tab1_explore_close_done_{selected_state}_{ch_sel}"):
-                                    st.session_state["tab1_explore_target"] = None
-                                    st.session_state["tab1_last_explore_marker"] = None
-                                    st.rerun()
-
-                            if hasattr(st, "dialog"):
-                                @st.dialog(f"🔎 Explore Adjustments: {ch_sel}")
-                                def _open_explorer_dialog() -> None:
-                                    render_alternative_cards()
-                                _open_explorer_dialog()
-                            else:
-                                st.markdown("**🔎 Explore Alternative Adjustments**")
-                                render_alternative_cards()
+                        st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
