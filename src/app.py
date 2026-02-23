@@ -2309,62 +2309,28 @@ def main() -> None:
                     if state_channels.empty:
                         st.info("No channel groups for selected segment filter.")
                     else:
-                        tab1_aggr = st.slider(
-                            "State table bid aggressiveness",
-                            min_value=0.5,
-                            max_value=3.0,
-                            value=1.0,
-                            step=0.1,
-                            key="tab1_cg_aggr",
-                        )
-                        state_channels["Scenario Target Adj %"] = state_channels["Applied Price Adjustment %"] * tab1_aggr
-                        state_channels["Scenario Target Adj %"] = np.minimum(
-                            state_channels["Scenario Target Adj %"], state_channels["Strategy Max Adj %"]
-                        )
-                        state_channels = apply_scenario_effects(state_channels, price_eval, "Scenario Target Adj %", settings)
-                        state_channels["Scenario Lift Proxy %"] = state_channels["Scenario Lift Proxy %"].clip(lower=0)
-                        state_wr_fallback = pd.Series(
-                            np.where(
-                                state_channels["Bids"] > 0,
-                                state_channels["Clicks"] / state_channels["Bids"],
-                                0,
-                            ),
-                            index=state_channels.index,
-                        )
-                        state_wr = state_channels["Bids to Clicks"].combine_first(state_wr_fallback)
-                        state_channels["Expected Additional Clicks"] = (
-                            state_channels["Bids"].fillna(0)
-                            * state_wr.fillna(0)
-                            * state_channels["Scenario Lift Proxy %"]
-                        )
-                        state_channels["Expected Additional Binds"] = (
-                            state_channels["Expected Additional Clicks"] * state_channels["Clicks to Binds Proxy"].fillna(0)
-                        )
+                        # Use already-applied model outputs (including manual popup overrides)
+                        # so table values are fully aligned with selected adjustments.
                         if "Total Click Cost" in state_channels.columns:
                             state_channels["Total Cost"] = state_channels["Total Click Cost"]
                         else:
                             state_channels["Total Cost"] = state_channels["Clicks"] * state_channels["Avg. CPC"]
-                        state_channels["Expected Total Cost"] = (
-                            (state_channels["Clicks"] + state_channels["Expected Additional Clicks"])
-                            * state_channels["Avg. CPC"]
-                            * (1 + state_channels["Scenario CPC Lift %"].fillna(0))
-                        )
-                        # Additional budget needed includes both additional volume and CPC increase.
-                        state_channels["Additional Budget Needed"] = state_channels["Expected Total Cost"] - state_channels["Total Cost"]
+                        state_channels["Additional Budget Needed"] = state_channels["Expected Additional Cost"].fillna(0)
                         state_channels["Expected Total Cost"] = state_channels["Total Cost"] + state_channels["Additional Budget Needed"]
 
                         cg_state = state_channels.groupby("Channel Groups", as_index=False).agg(
                             Bids=("Bids", "sum"),
+                            Binds=("Binds", "sum"),
                             SOV=("SOV", "mean"),
                             Clicks=("Clicks", "sum"),
                             **{"Win Rate": ("Bids to Clicks", "mean")},
                             **{"Total Cost": ("Total Cost", "sum")},
                             **{"Expected Total Cost": ("Expected Total Cost", "sum")},
                             **{"Additional Budget Needed": ("Additional Budget Needed", "sum")},
-                            **{"Rec. Bid Adj.": ("Scenario Bid Adjustment %", "median")},
+                            **{"Rec. Bid Adj.": ("Applied Price Adjustment %", "median")},
                             **{"Expected Additional Clicks": ("Expected Additional Clicks", "sum")},
                             **{"Expected Additional Binds": ("Expected Additional Binds", "sum")},
-                            **{"CPC Lift %": ("Scenario CPC Lift %", "mean")},
+                            **{"CPC Lift %": ("CPC Lift %", "mean")},
                         ).sort_values("Expected Additional Clicks", ascending=False)
                         cg_state["Total Cost Impact %"] = np.where(
                             cg_state["Total Cost"] > 0,
@@ -2376,6 +2342,7 @@ def main() -> None:
                             "Bids",
                             "SOV",
                             "Clicks",
+                            "Binds",
                             "Rec. Bid Adj.",
                             "Win Rate",
                             "Total Cost",
@@ -2387,7 +2354,7 @@ def main() -> None:
                         ]
                         cg_state_cols = [c for c in cg_state_cols if c in cg_state.columns]
                         table_df = cg_state[cg_state_cols].copy()
-                        table_df["Selected Bid Adj."] = table_df["Rec. Bid Adj."]
+                        table_df["Selected Price Adj."] = table_df["Rec. Bid Adj."]
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
                         table_df["Explore"] = ""
@@ -2397,7 +2364,7 @@ def main() -> None:
                             ov = st.session_state["bid_overrides"].get(okey, {})
                             if isinstance(ov, dict) and ov.get("apply", False):
                                 table_df.at[idx, "Apply"] = True
-                                table_df.at[idx, "Selected Bid Adj."] = float(ov.get("adj", rr["Rec. Bid Adj."]))
+                                table_df.at[idx, "Selected Price Adj."] = float(ov.get("adj", rr["Rec. Bid Adj."]))
                                 table_df.at[idx, "Selection Source"] = "Manual"
                         table_df = table_df[
                             [
@@ -2405,17 +2372,19 @@ def main() -> None:
                                 "Bids",
                                 "SOV",
                                 "Clicks",
+                                "Binds",
                                 "Win Rate",
                                 "Total Cost",
                                 "Rec. Bid Adj.",
+                                "Selected Price Adj.",
                                 "Explore",
                                 "Expected Total Cost",
                                 "Additional Budget Needed",
+                                "Expected Additional Clicks",
                                 "Expected Additional Binds",
                                 "CPC Lift %",
                                 "Apply",
                                 "Selection Source",
-                                "Selected Bid Adj.",
                                 "Open Popup",
                             ]
                         ]
@@ -2423,10 +2392,6 @@ def main() -> None:
                         selected_groups: list[str] = []
                         edited = table_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
-                        prev = st.session_state.get(draft_key)
-                        if isinstance(prev, pd.DataFrame):
-                            if set(prev["Channel Groups"]) == set(table_df["Channel Groups"]):
-                                edited = prev.copy()
 
                         if AGGRID_AVAILABLE:
                             button_renderer = JsCode(
@@ -2467,13 +2432,15 @@ def main() -> None:
                             gb.configure_column("Bids", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
                             gb.configure_column("SOV", editable=False, width=76, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Clicks", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
+                            gb.configure_column("Binds", editable=False, width=82, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
                             gb.configure_column("Win Rate", editable=False, width=92, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(2) + '%'")
                             gb.configure_column("Total Cost", editable=False, width=108, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Rec. Bid Adj.", editable=False, width=98, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
+                            gb.configure_column("Selected Price Adj.", editable=False, width=114, type=["numericColumn"], valueFormatter="value == null ? '' : (value>=0?'+':'') + Number(value).toFixed(0) + '%'")
                             gb.configure_column("Explore", headerName="🔎", cellRenderer=button_renderer, editable=False, width=60)
-                            gb.configure_column("Selected Bid Adj.", hide=True)
                             gb.configure_column("Expected Total Cost", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
                             gb.configure_column("Additional Budget Needed", header_name="Adjusted Budget", editable=False, width=116, type=["numericColumn"], valueFormatter="value == null ? '' : '$' + Math.round(value).toLocaleString()")
+                            gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
                             gb.configure_column("Expected Additional Binds", editable=False, width=124, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
                             gb.configure_column("CPC Lift %", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Apply", editable=True, width=70)
@@ -2535,7 +2502,7 @@ def main() -> None:
                         if do_apply_bulk and selected_groups:
                             for cg in selected_groups:
                                 m = edited["Channel Groups"] == cg
-                                edited.loc[m, "Selected Bid Adj."] = float(bulk_adj)
+                                edited.loc[m, "Selected Price Adj."] = float(bulk_adj)
                                 edited.loc[m, "Apply"] = True
                                 edited.loc[m, "Selection Source"] = "Manual"
                             st.session_state[draft_key] = edited
@@ -2552,7 +2519,7 @@ def main() -> None:
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
                                 if bool(rr.get("Apply", False)):
-                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Bid Adj.", 0.0))}
+                                    new_overrides[okey] = {"apply": True, "adj": float(rr.get("Selected Price Adj.", 0.0))}
                                 else:
                                     new_overrides.pop(okey, None)
                             st.session_state["bid_overrides"] = new_overrides
