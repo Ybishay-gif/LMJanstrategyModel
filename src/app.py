@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -1630,6 +1630,7 @@ def main() -> None:
                     if state_channels.empty:
                         st.info("No channel groups for selected segment filter.")
                     else:
+                        state_channels_base = state_channels.copy()
                         tab1_aggr = st.slider(
                             "State table bid aggressiveness",
                             min_value=0.5,
@@ -1697,17 +1698,79 @@ def main() -> None:
                             "Bids",
                             "SOV",
                             "Clicks",
-                            "Recommended Bid Adjustment",
                             "Win Rate",
                             "Total Cost",
-                            "Expected Total Cost",
-                            "Additional Budget Needed",
-                            "Total Cost Impact %",
-                            "Expected Additional Clicks",
-                            "Expected Additional Binds",
+                            "Recommended Bid Adjustment",
                             "CPC Lift %",
                         ]
-                        render_formatted_table(cg_state[cg_state_cols], use_container_width=True)
+
+                        # Build 5-strategy matrix columns: each cell shows win-rate / cost / binds impact.
+                        matrix = cg_state[cg_state_cols].copy()
+                        matrix = matrix.rename(columns={"Recommended Bid Adjustment": "Bid Adjustment"})
+                        mode_col_names = {
+                            "Max Growth": "Strategy: Max Growth",
+                            "Growth Leaning": "Strategy: Growth Leaning",
+                            "Balanced": "Strategy: Balanced",
+                            "Cost Leaning": "Strategy: Cost Leaning",
+                            "Optimize Cost": "Strategy: Optimize Cost",
+                        }
+                        for mode in OPTIMIZATION_MODES:
+                            mode_settings = replace(settings, optimization_mode=mode)
+                            tmp = state_channels_base.copy()
+                            tmp["Scenario Target Adj %"] = tmp["Applied Price Adjustment %"] * tab1_aggr
+                            tmp["Scenario Target Adj %"] = np.minimum(
+                                tmp["Scenario Target Adj %"], tmp["Strategy Max Adj %"]
+                            )
+                            tmp = apply_scenario_effects(tmp, price_eval, "Scenario Target Adj %", mode_settings)
+                            tmp["Scenario Lift Proxy %"] = tmp["Scenario Lift Proxy %"].clip(lower=0)
+                            tmp_wr_fb = pd.Series(
+                                np.where(tmp["Bids"] > 0, tmp["Clicks"] / tmp["Bids"], 0),
+                                index=tmp.index,
+                            )
+                            tmp_wr = tmp["Bids to Clicks"].combine_first(tmp_wr_fb)
+                            tmp["Expected Additional Clicks"] = (
+                                tmp["Bids"].fillna(0) * tmp_wr.fillna(0) * tmp["Scenario Lift Proxy %"]
+                            )
+                            tmp["Expected Additional Binds"] = (
+                                tmp["Expected Additional Clicks"] * tmp["Clicks to Binds Proxy"].fillna(0)
+                            )
+                            tmp["Total Cost"] = np.where(
+                                tmp["Total Click Cost"].notna(),
+                                tmp["Total Click Cost"],
+                                tmp["Clicks"] * tmp["Avg. CPC"],
+                            )
+                            tmp["Expected Total Cost"] = (
+                                (tmp["Clicks"] + tmp["Expected Additional Clicks"])
+                                * tmp["Avg. CPC"]
+                                * (1 + tmp["Scenario CPC Lift %"].fillna(0))
+                            )
+                            tmp["Additional Budget Needed"] = tmp["Expected Total Cost"] - tmp["Total Cost"]
+                            tgrp = tmp.groupby("Channel Groups", as_index=False).agg(
+                                WrUp=("Scenario Win Rate Lift %", "mean"),
+                                CpcUp=("Scenario CPC Lift %", "mean"),
+                                AddClicks=("Expected Additional Clicks", "sum"),
+                                AddBinds=("Expected Additional Binds", "sum"),
+                                AddBudget=("Additional Budget Needed", "sum"),
+                                ExpTotal=("Expected Total Cost", "sum"),
+                            )
+                            tgrp[mode_col_names[mode]] = tgrp.apply(
+                                lambda r: (
+                                    f"WR {r['WrUp']:+.0%} | CPC {r['CpcUp']:+.0%} | +{r['AddBinds']:,.0f} binds\n"
+                                    f"+{r['AddClicks']:,.0f} clicks | +${r['AddBudget']:,.0f} budget | Total ${r['ExpTotal']:,.0f}"
+                                ),
+                                axis=1,
+                            )
+                            matrix = matrix.merge(
+                                tgrp[["Channel Groups", mode_col_names[mode]]],
+                                on="Channel Groups",
+                                how="left",
+                            )
+
+                        render_formatted_table(matrix, use_container_width=True)
+                        st.caption(
+                            "Strategy columns: each cell shows win-rate uplift, CPC uplift, additional binds, "
+                            "plus expected total cost / additional budget / additional clicks."
+                        )
 
         st.markdown("**State Strategy vs Actual Indicator**")
         indicator_view = map_df[[
