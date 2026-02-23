@@ -1,4 +1,5 @@
 import re
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -2381,6 +2382,7 @@ def main() -> None:
                         popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         table_df["Adj Selection"] = ""
                         table_df["Adj Options"] = [[] for _ in range(len(table_df))]
+                        table_df["Adj Options JSON"] = ["[]" for _ in range(len(table_df))]
                         for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
@@ -2405,6 +2407,7 @@ def main() -> None:
                                 base_adj = float(table_df.at[idx, "Selected Price Adj."])
                                 labels = [f"{base_adj:+.0f}%: n/a Clicks || n/a CPC || n/a CPB (no stat-sig)"]
                             table_df.at[idx, "Adj Options"] = labels
+                            table_df.at[idx, "Adj Options JSON"] = json.dumps(labels)
                             current_adj = float(table_df.at[idx, "Selected Price Adj."])
                             selected_label = next((lb for lb in labels if parse_adj_from_label(lb) == current_adj), labels[0])
                             table_df.at[idx, "Adj Selection"] = selected_label
@@ -2429,6 +2432,7 @@ def main() -> None:
                                 "Apply",
                                 "Selection Source",
                                 "Adj Options",
+                                "Adj Options JSON",
                             ]
                         ]
                         for c in [
@@ -2452,18 +2456,6 @@ def main() -> None:
                         edited = grid_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
                         if AGGRID_AVAILABLE:
-                            dropdown_label_renderer = JsCode(
-                                """
-                                class DropLabelRenderer {
-                                  init(params) {
-                                    this.eGui = document.createElement('span');
-                                    const v = params.value || '';
-                                    this.eGui.innerText = v ? ('▼ ' + v) : '▼ Select adjustment';
-                                  }
-                                  getGui() { return this.eGui; }
-                                }
-                                """
-                            )
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_grid_options(singleClickEdit=True, stopEditingWhenCellsLoseFocus=True)
@@ -2482,12 +2474,18 @@ def main() -> None:
                                 headerName="Adj Selection ▼",
                                 editable=True,
                                 width=350,
-                                cellRenderer=dropdown_label_renderer,
-                                cellEditor="agRichSelectCellEditor",
+                                valueFormatter="value ? ('▼ ' + value) : '▼ Select adjustment'",
+                                cellEditor="agSelectCellEditor",
                                 cellEditorParams=JsCode(
                                     """
                                     function(params) {
-                                      return { values: params.data && params.data['Adj Options'] ? params.data['Adj Options'] : [] };
+                                      try {
+                                        const raw = (params.data && params.data['Adj Options JSON']) ? params.data['Adj Options JSON'] : '[]';
+                                        const vals = JSON.parse(raw);
+                                        return { values: Array.isArray(vals) ? vals : [] };
+                                      } catch (e) {
+                                        return { values: [] };
+                                      }
                                     }
                                     """
                                 ),
@@ -2501,7 +2499,16 @@ def main() -> None:
                             gb.configure_column("Apply", editable=True, width=70)
                             gb.configure_column("Selection Source", editable=False, width=108)
                             gb.configure_column("Adj Options", hide=True)
+                            gb.configure_column("Adj Options JSON", hide=True)
                             go = gb.build()
+                            custom_css = {
+                                ".ag-root-wrapper": {"background-color": "#0b1220", "border": "1px solid #1f2937", "border-radius": "10px"},
+                                ".ag-header": {"background-color": "#0f172a !important", "color": "#cbd5e1"},
+                                ".ag-row": {"background-color": "#0b1220", "color": "#e2e8f0"},
+                                ".ag-row-hover": {"background-color": "#111827 !important"},
+                                ".ag-cell": {"border-color": "#1f2937"},
+                                ".ag-theme-balham-dark .ag-input-field-input": {"background-color": "#111827", "color": "#e5e7eb"},
+                            }
                             grid = AgGrid(
                                 edited,
                                 gridOptions=go,
@@ -2511,6 +2518,7 @@ def main() -> None:
                                 reload_data=True,
                                 height=460,
                                 theme="balham-dark" if dark_mode else "balham",
+                                custom_css=custom_css if dark_mode else None,
                                 key=f"tab1_aggrid_{selected_state}",
                             )
                             edited = pd.DataFrame(grid["data"])
@@ -2545,6 +2553,7 @@ def main() -> None:
                                     "Apply": st.column_config.CheckboxColumn("Apply"),
                                     "Selection Source": st.column_config.TextColumn("Selection Source", disabled=True),
                                     "Adj Options": None,
+                                    "Adj Options JSON": None,
                                 },
                             )
                             st.session_state[draft_key] = edited
