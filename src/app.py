@@ -2341,7 +2341,8 @@ def main() -> None:
                             )
                             do_apply_bulk = a2.form_submit_button("Apply Selected")
                             do_revert_bulk = a3.form_submit_button("Revert Selected")
-                            do_save = a4.form_submit_button("Save Edits")
+                            do_open_explore = a4.form_submit_button("🔎 Open Popup")
+                            do_save = st.form_submit_button("Save Edits")
 
                         selected_rows = edited[edited["Select"] == True].copy() if "Select" in edited.columns else pd.DataFrame()
                         selected_groups = selected_rows["Channel Groups"].tolist() if not selected_rows.empty else []
@@ -2358,6 +2359,14 @@ def main() -> None:
                                 new_overrides.pop(f"{selected_state}|{cg}", None)
                             st.session_state["bid_overrides"] = new_overrides
                             st.rerun()
+                        if do_open_explore:
+                            explore_channels = edited[edited["Explore 🔎"] == True]["Channel Groups"].tolist()
+                            if explore_channels:
+                                st.session_state["tab1_explore_target"] = {
+                                    "state": selected_state,
+                                    "channel": explore_channels[0],
+                                }
+                                st.rerun()
                         if do_save:
                             new_overrides = dict(st.session_state["bid_overrides"])
                             for _, rr in edited.iterrows():
@@ -2366,16 +2375,10 @@ def main() -> None:
                                     new_overrides[okey] = {"apply": True, "adj": float(rr["Selected Bid Adjustment"])}
                                 else:
                                     new_overrides.pop(okey, None)
-                            explore_channels = edited[edited["Explore 🔎"] == True]["Channel Groups"].tolist()
-                            if explore_channels:
-                                st.session_state["tab1_explore_target"] = {
-                                    "state": selected_state,
-                                    "channel": explore_channels[0],
-                                }
                             st.session_state["bid_overrides"] = new_overrides
                             st.rerun()
 
-                        st.caption("Use `Save Edits` once after sorting/checking rows. Use `Apply Selected`/`Revert Selected` for bulk updates.")
+                        st.caption("Use `🔎 Open Popup` after checking `🔎` on a row. Use `Save Edits` once after sorting/checking rows.")
                         target = st.session_state.get("tab1_explore_target")
                         if isinstance(target, dict) and target.get("state") == selected_state and target.get("channel"):
                             ch_sel = str(target.get("channel"))
