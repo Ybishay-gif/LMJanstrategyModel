@@ -465,6 +465,8 @@ def prepare_channel_state(channel_state_df: pd.DataFrame) -> pd.DataFrame:
             df[col] = to_numeric(df[col])
 
     df["Segment"] = df["Channel Groups"].map(extract_segment)
+    # Exclude channel groups that do not map to a known insurance segment.
+    df = df[df["Segment"] != "UNKNOWN"].copy()
     return df
 
 
