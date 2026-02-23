@@ -664,14 +664,10 @@ def build_model_tables(
     rec["Win Rate Lift %"] = rec["Win Rate Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
     rec.loc[~rec["Has Sig Price Evidence"], ["Suggested Price Adjustment %", "Applied Price Adjustment %", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]] = 0.0
-    # Click-first growth with conservative fallback to win-rate signal.
-    rec["Lift Proxy %"] = np.where(
-        rec["Clicks Lift %"].fillna(0) > 0,
-        rec["Clicks Lift %"].fillna(0),
-        np.maximum(0, 0.35 * rec["Win Rate Lift %"].fillna(0)),
-    )
-    # Do not scale up when both tested click lift and fallback are non-positive.
-    no_growth = rec["Lift Proxy %"] <= 0
+    # Click-based growth: additional clicks come only from tested click lift.
+    rec["Lift Proxy %"] = rec["Clicks Lift %"]
+    # Do not scale up on negative tested click lift.
+    no_growth = rec["Clicks Lift %"] < 0
     rec.loc[no_growth, "Suggested Price Adjustment %"] = 0
     rec.loc[no_growth, "Applied Price Adjustment %"] = 0
     rec.loc[no_growth, "Clicks Lift %"] = 0
@@ -681,29 +677,11 @@ def build_model_tables(
 
     rec["Test-based Additional Clicks"] = np.where(
         rec["Has Sig Price Evidence"],
-        rec["Clicks"] * rec["Lift Proxy %"],
+        rec["Clicks"] * rec["Clicks Lift %"].clip(lower=0),
         0.0,
     )
-    # Keep a bounded structural fallback from win-rate headroom.
-    target_win_rate = rec["Strategy Bucket"].map(
-        {
-            "Strongest Momentum": 0.35,
-            "Moderate Momentum": 0.30,
-            "Minimal Growth": 0.24,
-            "LTV Constrained": 0.20,
-            "Closure Constrained": 0.20,
-            "Inactive/Low Spend": 0.15,
-        }
-    ).fillna(0.22)
-    fallback_win_rate = pd.Series(np.where(rec["Bids"] > 0, rec["Clicks"] / rec["Bids"], 0), index=rec.index)
-    current_win_rate = rec["Bids to Clicks"].combine_first(fallback_win_rate)
-    win_rate_headroom = np.maximum(target_win_rate - current_win_rate, 0)
-    adj_intensity = np.clip(rec["Applied Price Adjustment %"].fillna(0) / 10.0, 0, 2.0)
-    rec["Model-based Additional Clicks"] = 0.5 * rec["Bids"].fillna(0) * win_rate_headroom * adj_intensity
-    rec["Expected Additional Clicks"] = np.maximum(
-        rec["Test-based Additional Clicks"].fillna(0),
-        rec["Model-based Additional Clicks"].fillna(0),
-    )
+    rec["Model-based Additional Clicks"] = 0.0
+    rec["Expected Additional Clicks"] = rec["Test-based Additional Clicks"].fillna(0)
     # After merges, channel-level and seg-level bind rates may coexist; use seg rate when reliable.
     channel_bind_rate = rec.get("Clicks to Binds")
     if channel_bind_rate is None:
@@ -929,12 +907,7 @@ def apply_scenario_effects(df: pd.DataFrame, price_eval_df: pd.DataFrame, adjust
         "Scenario Win Rate Lift %",
         "Scenario CPC Lift %",
     ]] = mapped
-    # Use click lift first; if unavailable/negative, allow a conservative win-rate fallback.
-    out["Scenario Lift Proxy %"] = np.where(
-        out["Scenario Clicks Lift %"].fillna(0) > 0,
-        out["Scenario Clicks Lift %"].fillna(0),
-        np.maximum(0, 0.35 * out["Scenario Win Rate Lift %"].fillna(0)),
-    )
+    out["Scenario Lift Proxy %"] = out["Scenario Clicks Lift %"]
     return out
 
 
