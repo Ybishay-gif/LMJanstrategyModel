@@ -2168,30 +2168,74 @@ def main() -> None:
                             "Expected Additional Binds",
                             "CPC Lift %",
                         ]
-                        render_formatted_table(cg_state[cg_state_cols], use_container_width=True)
-
-                        st.markdown("**Apply Manual Bid Adjustments**")
-                        controls = cg_state[["Channel Groups", "Recommended Bid Adjustment"]].copy()
-                        controls["Selected Bid Adjustment"] = controls["Recommended Bid Adjustment"]
-                        controls["Apply"] = False
-                        for idx, rr in controls.iterrows():
+                        table_df = cg_state[cg_state_cols].copy()
+                        table_df["Selected Bid Adjustment"] = table_df["Recommended Bid Adjustment"]
+                        table_df["Apply"] = False
+                        table_df["Selection Source"] = "Suggested"
+                        for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
                             if isinstance(ov, dict) and ov.get("apply", False):
-                                controls.at[idx, "Apply"] = True
-                                controls.at[idx, "Selected Bid Adjustment"] = float(ov.get("adj", rr["Recommended Bid Adjustment"]))
+                                table_df.at[idx, "Apply"] = True
+                                table_df.at[idx, "Selected Bid Adjustment"] = float(ov.get("adj", rr["Recommended Bid Adjustment"]))
+                                table_df.at[idx, "Selection Source"] = "Manual"
+
+                        b1, b2, b3, b4 = st.columns([2, 1, 1, 1])
+                        bulk_groups = b1.multiselect(
+                            "Bulk select channel groups",
+                            options=table_df["Channel Groups"].tolist(),
+                            default=[],
+                            key=f"tab1_bulk_groups_{selected_state}",
+                        )
+                        bulk_adj = b2.number_input(
+                            "Bulk bid adj %",
+                            min_value=-10.0,
+                            max_value=60.0,
+                            value=10.0,
+                            step=5.0,
+                            key=f"tab1_bulk_adj_{selected_state}",
+                        )
+                        do_apply_bulk = b3.button("Apply Bulk", key=f"tab1_bulk_apply_{selected_state}")
+                        do_revert_bulk = b4.button("Revert Bulk", key=f"tab1_bulk_revert_{selected_state}")
+
+                        if do_apply_bulk and bulk_groups:
+                            new_overrides = dict(st.session_state["bid_overrides"])
+                            for cg in bulk_groups:
+                                new_overrides[f"{selected_state}|{cg}"] = {"apply": True, "adj": float(bulk_adj)}
+                            st.session_state["bid_overrides"] = new_overrides
+                            st.rerun()
+                        if do_revert_bulk and bulk_groups:
+                            new_overrides = dict(st.session_state["bid_overrides"])
+                            for cg in bulk_groups:
+                                new_overrides.pop(f"{selected_state}|{cg}", None)
+                            st.session_state["bid_overrides"] = new_overrides
+                            st.rerun()
+
                         edited = st.data_editor(
-                            controls,
+                            table_df,
                             use_container_width=True,
                             hide_index=True,
                             key=f"tab1_apply_editor_{selected_state}",
                             column_config={
                                 "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
+                                "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
+                                "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
+                                "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
                                 "Recommended Bid Adjustment": st.column_config.NumberColumn("Recommended", format="%+.0f%%", disabled=True),
                                 "Selected Bid Adjustment": st.column_config.NumberColumn("Selected", format="%+.0f%%"),
                                 "Apply": st.column_config.CheckboxColumn("Apply"),
+                                "Selection Source": st.column_config.TextColumn("Selection", disabled=True),
+                                "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.2f%%", disabled=True),
+                                "Total Cost": st.column_config.NumberColumn("Total Cost", format="dollar", disabled=True),
+                                "Expected Total Cost": st.column_config.NumberColumn("Expected Total Cost", format="dollar", disabled=True),
+                                "Additional Budget Needed": st.column_config.NumberColumn("Additional Budget Needed", format="dollar", disabled=True),
+                                "Total Cost Impact %": st.column_config.NumberColumn("Total Cost Impact %", format="%.0f%%", disabled=True),
+                                "Expected Additional Clicks": st.column_config.NumberColumn("Expected Additional Clicks", format="localized", disabled=True),
+                                "Expected Additional Binds": st.column_config.NumberColumn("Expected Additional Binds", format="localized", disabled=True),
+                                "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
                             },
                         )
+
                         new_overrides = dict(st.session_state["bid_overrides"])
                         for _, rr in edited.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
@@ -2202,6 +2246,7 @@ def main() -> None:
                         if new_overrides != st.session_state["bid_overrides"]:
                             st.session_state["bid_overrides"] = new_overrides
                             st.rerun()
+                        st.caption("Manual rows are marked as `Manual` and can be reverted by unchecking `Apply` or using `Revert Bulk`.")
 
                         with st.expander("🔎 Explore Alternative Adjustments", expanded=False):
                             ch_opts = sorted(state_channels["Channel Groups"].dropna().unique().tolist())
