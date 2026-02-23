@@ -3,6 +3,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -413,7 +414,7 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         }
     ch_curves = {str(ch): g.sort_values("Price Adjustment Percent") for ch, g in px.groupby("Channel Groups")}
 
-    def _pick_from_curve(curve: pd.DataFrame, row: pd.Series) -> pd.Series | None:
+    def _pick_from_curve(curve: pd.DataFrame, row: pd.Series) -> Optional[pd.Series]:
         if curve is None or curve.empty:
             return None
         bids = float(row.get("Bids", 0) or 0)
@@ -1364,7 +1365,7 @@ def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, 
     )
 
 
-def parse_adj_from_label(label: str) -> float | None:
+def parse_adj_from_label(label: str) -> Optional[float]:
     if not isinstance(label, str):
         return None
     m = re.match(r"\s*([+-]?\d+(?:\.\d+)?)%\s*:", label)
@@ -2416,7 +2417,7 @@ def main() -> None:
                             if isinstance(ov, dict) and ov.get("apply", False):
                                 table_df.at[idx, "Apply"] = True
                                 table_df.at[idx, "Selected Price Adj."] = float(ov.get("adj", rr["Rec. Bid Adj."]))
-                                table_df.at[idx, "Selection Source"] = "Manual"
+                                table_df.at[idx, "Selection Source"] = "Manual adjustment"
                             ch = str(rr["Channel Groups"])
                             ch_opts = popup_state_df[popup_state_df["Channel Groups"] == ch] if not popup_state_df.empty else pd.DataFrame()
                             labels = []
@@ -2597,7 +2598,7 @@ def main() -> None:
                             adj = parse_adj_from_label(rr.get("Adj Selection", ""))
                             if adj is not None:
                                 edited.at[i, "Selected Price Adj"] = float(adj)
-                                edited.at[i, "Selection Source"] = "Manual"
+                                edited.at[i, "Selection Source"] = "Manual adjustment"
                                 edited.at[i, "Apply"] = True
                         st.session_state[draft_key] = edited
                         selected_rows = edited[edited["Select"] == True] if "Select" in edited.columns else pd.DataFrame()
@@ -2622,7 +2623,7 @@ def main() -> None:
                                 m = edited["Channel Groups"] == cg
                                 edited.loc[m, "Selected Price Adj"] = float(bulk_adj)
                                 edited.loc[m, "Apply"] = True
-                                edited.loc[m, "Selection Source"] = "Manual"
+                                edited.loc[m, "Selection Source"] = "Manual adjustment"
                             st.session_state[draft_key] = edited
                             st.rerun()
                         if do_revert_bulk and selected_groups:
