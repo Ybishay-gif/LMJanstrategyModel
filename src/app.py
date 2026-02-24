@@ -1250,15 +1250,31 @@ def build_price_exploration_master_detail(
     )
     detail["Additional Budget Needed"] = detail["Expected Total Cost"] - detail["Current Cost"].fillna(0.0)
     detail["Adj Label"] = detail["Price Adjustment Percent"].map(lambda x: f"{float(x):+.0f}%")
-    detail["Evidence Icon"] = np.where(
-        detail["Source Used"].eq("State+Channel"),
-        np.where(detail["Sig Level"].eq("Strong"), "🟢", "🟡"),
-        "🔷",
+    detail["Evidence Icon"] = np.select(
+        [
+            detail["Source Used"].eq("State+Channel"),
+            detail["Source Used"].eq("Channel Fallback"),
+            detail["Source Used"].eq("Channel"),
+        ],
+        [
+            np.where(detail["Sig Level"].eq("Strong"), "🟢", "🟡"),
+            "🔷",
+            "🔹",
+        ],
+        default="⚪",
     )
-    detail["Evidence Label"] = np.where(
-        detail["Source Used"].eq("State+Channel"),
-        detail["Sig Level"].astype(str) + " (State+Channel)",
-        detail["Sig Level"].astype(str) + " (Channel Fallback)",
+    detail["Evidence Label"] = np.select(
+        [
+            detail["Source Used"].eq("State+Channel"),
+            detail["Source Used"].eq("Channel Fallback"),
+            detail["Source Used"].eq("Channel"),
+        ],
+        [
+            detail["Sig Level"].astype(str) + " (State+Channel)",
+            detail["Sig Level"].astype(str) + " (Channel Fallback)",
+            detail["Sig Level"].astype(str) + " (Channel Only)",
+        ],
+        default=detail["Sig Level"].astype(str) + " (Unknown Source)",
     )
     detail = detail.rename(
         columns={
