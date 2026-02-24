@@ -3380,7 +3380,6 @@ def main() -> None:
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
                     with fixed_height_container(panel_height, key="tab4_cards_scroll"):
-                        summary_ph = st.empty()
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
                             card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
@@ -3435,16 +3434,6 @@ def main() -> None:
                     elif not sel_rows.empty and "Applied Price Adjustment %" in sel_rows.columns:
                         adj_val = float(pd.to_numeric(sel_rows["Applied Price Adjustment %"], errors="coerce").median())
                 adj_txt = "n/a" if pd.isna(adj_val) else f"{adj_val:+.0f}% ({source_txt})"
-                summary_ph.markdown(
-                    (
-                        "<div class='px-detail-shell' style='margin-bottom:8px;'>"
-                        f"<div class='px-title'>{state_s} · {channel_s} · {segment_s}</div>"
-                        f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
-                        "</div>"
-                    ),
-                    unsafe_allow_html=True,
-                )
-
                 with right:
                     with fixed_height_container(panel_height, key="tab4_right_scroll"):
                         sdet = sdet_preview.copy()
@@ -3480,6 +3469,7 @@ def main() -> None:
                                     "<div class='px-detail-shell'>"
                                     f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
                                     f"<div class='px-sub'>Stat-sig source: {sdet['Source Used'].iloc[0]}</div>"
+                                    f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
                                     "</div>"
                                 ),
                                 unsafe_allow_html=True,
