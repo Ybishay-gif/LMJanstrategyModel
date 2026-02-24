@@ -2204,11 +2204,8 @@ def main() -> None:
         user_now = normalize_email(st.session_state.get("auth_user", ""))
         is_admin = user_now == ADMIN_EMAIL
         s1, s2 = st.columns(2)
-        if is_admin:
-            if s1.button("⚙️ Settings", key="auth_settings_btn", use_container_width=True):
-                st.session_state["show_settings"] = not st.session_state.get("show_settings", False)
-        else:
-            s1.markdown("&nbsp;")
+        if s1.button("⚙️ Settings", key="auth_settings_btn", use_container_width=True, disabled=not is_admin):
+            st.session_state["show_settings"] = not st.session_state.get("show_settings", False)
         if s2.button("🚪 Logout", key="auth_logout_btn", use_container_width=True):
             u = normalize_email(st.session_state.get("auth_user", ""))
             users = load_auth_users()
