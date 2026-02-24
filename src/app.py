@@ -2361,7 +2361,6 @@ def main() -> None:
                             if isinstance(selected_rows, list) and selected_rows:
                                 selected_groups = [str(r.get("Channel Groups")) for r in selected_rows if r.get("Channel Groups") is not None]
                         else:
-                            all_adj_options = sorted({x for xs in edited["Adj Options"].tolist() for x in (xs if isinstance(xs, list) else [])})
                             edited = st.data_editor(
                                 edited,
                                 use_container_width=True,
@@ -2377,7 +2376,7 @@ def main() -> None:
                                     "Win Rate": st.column_config.NumberColumn("Win Rate", format="%.2f%%", disabled=True),
                                     "Total Cost": st.column_config.NumberColumn("Total Cost", format="dollar", disabled=True),
                                     "Rec Bid Adj": st.column_config.NumberColumn("Rec. Bid Adj.", format="%+.0f%%", disabled=True),
-                                    "Adj Selection": st.column_config.SelectboxColumn("Adj Selection", options=all_adj_options),
+                                    "Adj Selection": st.column_config.TextColumn("Adj Selection", disabled=True),
                                     "Selected Price Adj": st.column_config.NumberColumn("Selected Price Adj.", format="%+.0f%%", disabled=True),
                                     "Expected Total Cost": st.column_config.NumberColumn("Expected Total Cost", format="dollar", disabled=True),
                                     "Additional Budget Needed": st.column_config.NumberColumn("Adjusted Budget", format="dollar", disabled=True),
@@ -2434,6 +2433,61 @@ def main() -> None:
                         is_saving = bool(st.session_state.get(saving_key, False))
                         if is_saving:
                             st.info("Saving changes and recalculating. Please wait...")
+
+                        if len(selected_groups) == 1:
+                            sel_cg = str(selected_groups[0])
+                            row_mask = edited["Channel Groups"].astype(str) == sel_cg
+                            if row_mask.any():
+                                ridx = edited[row_mask].index[0]
+                                row_options = edited.at[ridx, "Adj Options"] if "Adj Options" in edited.columns else []
+                                if isinstance(row_options, list) and row_options:
+                                    cur_label = str(edited.at[ridx, "Adj Selection"])
+                                    try:
+                                        cur_idx = row_options.index(cur_label)
+                                    except Exception:
+                                        cur_idx = 0
+                                    r1, r2 = st.columns([3, 1])
+                                    picked_label = r1.selectbox(
+                                        f"Adjustment options for `{sel_cg}` in `{selected_state}`",
+                                        options=row_options,
+                                        index=cur_idx,
+                                        key=f"tab1_row_option_{selected_state}_{sel_cg}",
+                                        disabled=is_saving,
+                                    )
+                                    apply_row_option = r2.button(
+                                        "Apply Row Option",
+                                        key=f"tab1_apply_row_option_{selected_state}_{sel_cg}",
+                                        disabled=is_saving,
+                                    )
+                                    if apply_row_option:
+                                        edited.at[ridx, "Adj Selection"] = picked_label
+                                        adj_map = {}
+                                        try:
+                                            adj_map = json.loads(edited.at[ridx, "Adj Map JSON"] or "{}")
+                                        except Exception:
+                                            adj_map = {}
+                                        adj_val = as_float(adj_map.get(picked_label, parse_adj_from_label(picked_label)), np.nan)
+                                        rec_adj = as_float(edited.at[ridx, "Rec Bid Adj"], 0.0)
+                                        if pd.notna(adj_val):
+                                            edited.at[ridx, "Selected Price Adj"] = float(adj_val)
+                                            if not close_adj(float(adj_val), rec_adj):
+                                                edited.at[ridx, "Selection Source"] = "Manual adjustment"
+                                                edited.at[ridx, "Apply"] = True
+                                            else:
+                                                edited.at[ridx, "Selection Source"] = "Suggested"
+                                                edited.at[ridx, "Apply"] = False
+                                            ch_opts = popup_state_df[popup_state_df["Channel Groups"] == sel_cg] if not popup_state_df.empty else pd.DataFrame()
+                                            if not ch_opts.empty:
+                                                mm = ch_opts.copy()
+                                                mm["dist"] = (pd.to_numeric(mm["Bid Adj %"], errors="coerce").fillna(0.0) - float(adj_val)).abs()
+                                                best = mm.sort_values(["dist", "Bid Adj %"], ascending=[True, True]).iloc[0]
+                                                edited.at[ridx, "Expected Additional Clicks"] = as_float(best.get("Additional Clicks"), as_float(edited.at[ridx, "Expected Additional Clicks"], 0.0))
+                                                edited.at[ridx, "Expected Additional Binds"] = as_float(best.get("Additional Binds"), as_float(edited.at[ridx, "Expected Additional Binds"], 0.0))
+                                                edited.at[ridx, "CPC Lift %"] = as_float(best.get("CPC Uplift"), as_float(edited.at[ridx, "CPC Lift %"], 0.0))
+                                                edited.at[ridx, "Expected Total Cost"] = as_float(best.get("Expected Total Cost"), as_float(edited.at[ridx, "Expected Total Cost"], 0.0))
+                                                edited.at[ridx, "Additional Budget Needed"] = as_float(best.get("Additional Budget Needed"), as_float(edited.at[ridx, "Additional Budget Needed"], 0.0))
+                                        st.session_state[draft_key] = edited
+                                        st.rerun()
 
                         a0, a1, a2, a3, a4, a5 = st.columns([1, 1.2, 1, 1, 1, 1.2])
                         do_select_all = a0.button("Select All Rows", key=f"tab1_select_all_{selected_state}", disabled=is_saving)
