@@ -86,6 +86,43 @@ def parse_state_strategy_text(raw: str) -> pd.DataFrame:
     return pd.DataFrame(pairs, columns=["State", "Strategy Bucket"]).drop_duplicates("State")
 
 
+def file_mtime(path: str) -> float:
+    try:
+        return float(Path(path).stat().st_mtime)
+    except Exception:
+        return 0.0
+
+
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
+def build_all_from_paths(
+    strategy_path: str,
+    state_path: str,
+    state_seg_path: str,
+    channel_group_path: str,
+    price_path: str,
+    channel_state_path: str,
+    settings: Settings,
+    mtime_signature: tuple[float, float, float, float, float, float],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # mtime_signature is only for cache invalidation when files change.
+    _ = mtime_signature
+    strategy_df = read_state_strategy(strategy_path)
+    state_raw = read_csv(state_path)
+    state_seg_raw = read_csv(state_seg_path)
+    _ = read_csv(channel_group_path)
+    price_raw = read_csv(price_path)
+    channel_state_raw = read_csv(channel_state_path)
+
+    state_df = prepare_state(state_raw, strategy_df, settings)
+    state_seg_df = prepare_state_seg(state_seg_raw, state_raw, settings)
+    channel_state_df = prepare_channel_state(channel_state_raw)
+    price_eval, best_adj = prepare_price_exploration(price_raw, settings)
+    rec_df, state_extra_df, state_seg_extra_df, channel_summary_df = build_model_tables(
+        state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
+    )
+    return rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df
+
+
 def to_numeric(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.replace(",", "", regex=False).str.replace("$", "", regex=False)
     pct_mask = s.str.contains("%")
@@ -1520,12 +1557,30 @@ def main() -> None:
 
     try:
         if data_mode == "Repo data (GitHub)":
-            strategy_df = read_state_strategy(DEFAULT_PATHS["state_strategy"])
-            state_raw = read_csv(DEFAULT_PATHS["state_data"])
-            state_seg_raw = read_csv(DEFAULT_PATHS["state_seg"])
-            _ = read_csv(DEFAULT_PATHS["channel_group"])
-            price_raw = read_csv(DEFAULT_PATHS["channel_price_exp"])
-            channel_state_raw = read_csv(DEFAULT_PATHS["channel_state"])
+            strategy_path = DEFAULT_PATHS["state_strategy"]
+            state_path = DEFAULT_PATHS["state_data"]
+            state_seg_path = DEFAULT_PATHS["state_seg"]
+            channel_group_path = DEFAULT_PATHS["channel_group"]
+            price_path = DEFAULT_PATHS["channel_price_exp"]
+            channel_state_path = DEFAULT_PATHS["channel_state"]
+            mtimes = (
+                file_mtime(strategy_path),
+                file_mtime(state_path),
+                file_mtime(state_seg_path),
+                file_mtime(channel_group_path),
+                file_mtime(price_path),
+                file_mtime(channel_state_path),
+            )
+            rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
+                strategy_path,
+                state_path,
+                state_seg_path,
+                channel_group_path,
+                price_path,
+                channel_state_path,
+                settings,
+                mtimes,
+            )
         elif data_mode == "Upload files (Cloud)":
             required_uploads = [
                 strategy_upload, state_upload, state_seg_upload,
@@ -1542,24 +1597,36 @@ def main() -> None:
             _ = pd.read_csv(channel_group_upload)
             price_raw = pd.read_csv(price_upload)
             channel_state_raw = pd.read_csv(channel_state_upload)
+            state_df = prepare_state(state_raw, strategy_df, settings)
+            state_seg_df = prepare_state_seg(state_seg_raw, state_raw, settings)
+            channel_state_df = prepare_channel_state(channel_state_raw)
+            price_eval, best_adj = prepare_price_exploration(price_raw, settings)
+            rec_df, state_extra_df, state_seg_extra_df, _ = build_model_tables(
+                state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
+            )
         else:
-            strategy_df = read_state_strategy(strategy_path)
-            state_raw = read_csv(state_path)
-            state_seg_raw = read_csv(state_seg_path)
-            _ = read_csv(channel_group_path)
-            price_raw = read_csv(price_path)
-            channel_state_raw = read_csv(channel_state_path)
+            mtimes = (
+                file_mtime(strategy_path),
+                file_mtime(state_path),
+                file_mtime(state_seg_path),
+                file_mtime(channel_group_path),
+                file_mtime(price_path),
+                file_mtime(channel_state_path),
+            )
+            rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
+                strategy_path,
+                state_path,
+                state_seg_path,
+                channel_group_path,
+                price_path,
+                channel_state_path,
+                settings,
+                mtimes,
+            )
     except Exception as exc:
         st.error(f"Failed to load data: {exc}")
         return
 
-    state_df = prepare_state(state_raw, strategy_df, settings)
-    state_seg_df = prepare_state_seg(state_seg_raw, state_raw, settings)
-    channel_state_df = prepare_channel_state(channel_state_raw)
-    price_eval, best_adj = prepare_price_exploration(price_raw, settings)
-    rec_df, state_extra_df, state_seg_extra_df, channel_summary_df = build_model_tables(
-        state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
-    )
     rec_df_model = rec_df.copy()
     if "bid_overrides" not in st.session_state:
         st.session_state["bid_overrides"] = load_overrides_from_disk()
