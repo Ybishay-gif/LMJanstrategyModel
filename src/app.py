@@ -2379,7 +2379,7 @@ def main() -> None:
                         if do_select_all:
                             edited["Select"] = True
                             st.session_state[draft_key] = edited
-                            st.rerun()
+                            st.info("Draft updated. Click `Save Edits` to apply.")
 
                         if do_apply_bulk and selected_groups:
                             for cg in selected_groups:
@@ -2388,7 +2388,7 @@ def main() -> None:
                                 edited.loc[m, "Apply"] = True
                                 edited.loc[m, "Selection Source"] = "Manual adjustment"
                             st.session_state[draft_key] = edited
-                            st.rerun()
+                            st.info("Draft updated. Click `Save Edits` to apply.")
                         if do_revert_bulk and selected_groups:
                             for cg in selected_groups:
                                 m = edited["Channel Groups"] == cg
@@ -2404,7 +2404,7 @@ def main() -> None:
                                 edited.loc[m, "Apply"] = False
                                 edited.loc[m, "Selection Source"] = "Suggested"
                             st.session_state[draft_key] = edited
-                            st.rerun()
+                            st.info("Draft updated. Click `Save Edits` to apply.")
                         if do_revert_all:
                             edited["Select"] = False
                             edited["Apply"] = False
@@ -2418,7 +2418,7 @@ def main() -> None:
                                         picked = next((lb for lb in opts if parse_adj_from_label(lb) == recv), opts[0])
                                         edited.at[idx, "Adj Selection"] = picked
                             st.session_state[draft_key] = edited
-                            st.rerun()
+                            st.info("Draft updated. Click `Save Edits` to apply.")
                         if do_save:
                             prev_overrides = dict(st.session_state.get("bid_overrides", {}))
                             new_overrides = dict(prev_overrides)
