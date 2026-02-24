@@ -1250,6 +1250,16 @@ def build_price_exploration_master_detail(
     )
     detail["Additional Budget Needed"] = detail["Expected Total Cost"] - detail["Current Cost"].fillna(0.0)
     detail["Adj Label"] = detail["Price Adjustment Percent"].map(lambda x: f"{float(x):+.0f}%")
+    detail["Evidence Icon"] = np.where(
+        detail["Source Used"].eq("State+Channel"),
+        np.where(detail["Sig Level"].eq("Strong"), "🟢", "🟡"),
+        "🔷",
+    )
+    detail["Evidence Label"] = np.where(
+        detail["Source Used"].eq("State+Channel"),
+        detail["Sig Level"].astype(str) + " (State+Channel)",
+        detail["Sig Level"].astype(str) + " (Channel Fallback)",
+    )
     detail = detail.rename(
         columns={
             "Price Adjustment Percent": "Bid Adj %",
@@ -3469,6 +3479,7 @@ def main() -> None:
                                     "<div class='px-detail-shell'>"
                                     f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
                                     f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
+                                    f"<div class='px-sub'>Evidence: <b>{sdet['Evidence Label'].iloc[0]}</b></div>"
                                     "</div>"
                                 ),
                                 unsafe_allow_html=True,
@@ -3489,14 +3500,20 @@ def main() -> None:
                             st.markdown("<div class='px-sep'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='px-subhead'>Testing Impact Chart</div>", unsafe_allow_html=True)
                             sdet = sdet.sort_values("Bid Adj %")
-                            bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
+                            bar_df = sdet[[
+                                "Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift",
+                                "Sig Icon", "Sig Level", "Source Used", "Evidence Icon", "Evidence Label"
+                            ]].copy()
                             bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
                             bar_df["Test Bids"] = pd.to_numeric(sdet["Test Bids"], errors="coerce").fillna(0.0).values
                             bar_df["Test Clicks"] = pd.to_numeric(sdet.get("Test Clicks", 0), errors="coerce").fillna(0.0).values
                             bar_df["Bid Share"] = np.where(ch_bids > 0, bar_df["Test Bids"] / ch_bids, np.nan)
                             bar_df["Click Share"] = np.where(ch_clicks > 0, bar_df["Test Clicks"] / ch_clicks, np.nan)
                             melted = bar_df.melt(
-                                id_vars=["Adj Label", "Sig Icon", "Sig Level", "Test Bids", "Test Clicks", "Bid Share", "Click Share"],
+                                id_vars=[
+                                    "Adj Label", "Sig Icon", "Sig Level", "Source Used", "Evidence Icon", "Evidence Label",
+                                    "Test Bids", "Test Clicks", "Bid Share", "Click Share"
+                                ],
                                 value_vars=["Win-Rate Uplift", "CPC Uplift"],
                                 var_name="Metric",
                                 value_name="Change",
@@ -3520,6 +3537,8 @@ def main() -> None:
                                         melted["Bid Share"].to_numpy(),
                                         melted["Test Clicks"].to_numpy(),
                                         melted["Click Share"].to_numpy(),
+                                        melted["Source Used"].to_numpy(),
+                                        melted["Sig Level"].to_numpy(),
                                     ],
                                     axis=-1,
                                 ),
@@ -3527,7 +3546,8 @@ def main() -> None:
                                     "%{x}<br>"
                                     "%{fullData.name}: %{y:.2%}<br>"
                                     "Test Bids: %{customdata[0]:,.0f} (%{customdata[1]:.1%} of total)<br>"
-                                    "Test Clicks: %{customdata[2]:,.0f} (%{customdata[3]:.1%} of total)"
+                                    "Test Clicks: %{customdata[2]:,.0f} (%{customdata[3]:.1%} of total)<br>"
+                                    "Evidence: %{customdata[4]} | Sig: %{customdata[5]}"
                                     "<extra></extra>"
                                 ),
                             )
@@ -3539,7 +3559,7 @@ def main() -> None:
                                 fig_px.add_annotation(
                                     x=rr["Adj Label"],
                                     y=y_max * 1.18,
-                                    text=f"{rr['Sig Icon']} {rr['Sig Level']}",
+                                    text=f"{rr['Evidence Icon']} {rr['Evidence Label']}",
                                     showarrow=False,
                                     font=dict(size=11, color="#cbd5e1"),
                                 )
