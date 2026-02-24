@@ -3139,24 +3139,22 @@ def main() -> None:
                     linear-gradient(145deg, rgba(15,23,42,0.90), rgba(17,24,39,0.85));
             }
             [class*="st-key-px_card_"] button {
-                background:
-                    radial-gradient(120% 140% at 0% 0%, rgba(14,165,233,0.16), rgba(14,165,233,0) 42%),
-                    radial-gradient(120% 120% at 100% 0%, rgba(34,211,238,0.12), rgba(34,211,238,0) 44%),
-                    linear-gradient(145deg, rgba(15,23,42,0.95), rgba(17,24,39,0.90)) !important;
-                border: 1px solid rgba(56,189,248,0.26) !important;
+                background: linear-gradient(145deg, rgba(19,27,44,0.96), rgba(21,30,48,0.90)) !important;
+                border: 1px solid rgba(45,212,191,0.78) !important;
                 border-radius: 14px !important;
-                padding: 9px 11px !important;
-                min-height: 126px !important;
+                padding: 12px !important;
+                min-height: 148px !important;
                 height: auto !important;
                 text-align: left !important;
                 color: #e2e8f0 !important;
-                font-size: 0.84rem !important;
+                font-size: 0.82rem !important;
                 line-height: 1.35 !important;
-                box-shadow: 0 10px 26px rgba(2,6,23,0.35) !important;
+                box-shadow: 0 0 0 1px rgba(45,212,191,0.22), 0 0 18px rgba(45,212,191,0.28), 0 10px 26px rgba(2,6,23,0.35) !important;
                 margin-bottom: 6px !important;
+                white-space: pre-line !important;
             }
             [class*="st-key-px_card_"] button:hover {
-                border-color: rgba(34,211,238,0.48) !important;
+                border-color: rgba(45,212,191,1.0) !important;
                 transform: translateY(-1px);
             }
             [class*="st-key-px_card_"] button[kind="primary"] {
@@ -3232,19 +3230,22 @@ def main() -> None:
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
                     st.markdown("**Master Cards**")
+                    max_points_page = max(float(pd.to_numeric(page_df["Testing Points Count"], errors="coerce").fillna(1).max()), 1.0)
                     for _, r in page_df.iterrows():
                         card_key = f"{r['State']}|{r['Channel Groups']}|{r['Segment']}"
                         active = card_key == st.session_state.get("px_selected_card_key")
                         points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
-                        point_boxes = " ".join([f"▣{p}" for p in points[:8]])
-                        header_line = f"{r['State']} · {r['Channel Groups']}"
-                        kpi_line = f"Bids {r['Total Bids']:,.0f}  |  Clicks {r['Total Clicks']:,.0f}  |  Binds {r['Total Binds']:,.0f}"
-                        seg_line = f"Segment {r['Segment']}  |  {int(r['Testing Points Count'])} points  |  {r['Source Used']}"
+                        point_boxes = " ".join([f"`{p}`" for p in points[:6]])
+                        readiness = int(round(100.0 * float(r["Testing Points Count"]) / max_points_page))
+                        header_line = f"**{r['State']} {r['Segment']}**"
+                        group_line = f"**{r['Channel Groups']}**"
+                        meta_line = f"Bids {r['Total Bids']:,.0f} | Clicks {r['Total Clicks']:,.0f} | {r['Source Used']}"
                         card_label = (
+                            f"`{readiness}%`  Bidding Group\n"
                             f"{header_line}\n"
-                            f"{kpi_line}\n"
-                            f"{seg_line}\n"
-                            f"{point_boxes}"
+                            f"{group_line}\n"
+                            f"{meta_line}\n"
+                            f"Test points: {point_boxes}   {int(r['Testing Points Count'])}"
                         )
                         if st.button(
                             card_label,
