@@ -1,4 +1,12 @@
-# Add one authorized email per line.
-# Example:
-# user1@company.com
-# user2@company.com
+alenaangela.abella@libertymutual.com
+andrew.hayes@libertymutual.com
+apozitski@kissterra.com
+bryn.damon@libertymutual.com
+christopher.chabot@libertymutual.com
+ethan@kissterra.com
+lauren.oshea@libertymutual.com
+michael.wettergren@libertymutual.com
+monica.bull@libertymutual.com
+ryan.hemker@libertymutual.com
+ryan.theriault@libertymutual.com
+ybishay@kissterra.com
