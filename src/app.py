@@ -3329,15 +3329,18 @@ def main() -> None:
                             active = card_key == st.session_state.get("px_selected_card_key")
                             points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
                             point_boxes = " ".join([f"[{p}]" for p in points[:7]])
-                            header_line = f"{r['State']} · {ch_name}"
-                            stats_line = f"Bids {r['Total Bids']:,.0f}   Clicks {r['Total Clicks']:,.0f}   Binds {r['Total Binds']:,.0f}"
-                            segment_line = f"Segment {r['Segment']}   Source {r['Source Used']}"
+                            header_line = f"**{ch_name} · {r['State']}**"
+                            stats_line = (
+                                f"Bids: **{r['Total Bids']:,.0f}**   ||   "
+                                f"Clicks: **{r['Total Clicks']:,.0f}**   ||   "
+                                f"Binds: **{r['Total Binds']:,.0f}**"
+                            )
+                            segment_line = f"Segment: {r['Segment']}   |   Source: {r['Source Used']}"
                             card_label = (
-                                f"Bidding Group\n"
                                 f"{header_line}\n"
                                 f"{stats_line}\n"
                                 f"{segment_line}\n"
-                                f"{point_boxes}"
+                                f"Testing Points: {point_boxes if point_boxes else 'n/a'}"
                             )
                             if st.button(
                                 card_label,
