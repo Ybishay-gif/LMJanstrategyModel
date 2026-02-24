@@ -3551,18 +3551,6 @@ def main() -> None:
                                     "<extra></extra>"
                                 ),
                             )
-                            y_max = max(
-                                float(pd.to_numeric(melted["Change"], errors="coerce").fillna(0).max()),
-                                0.02,
-                            )
-                            for _, rr in bar_df.iterrows():
-                                fig_px.add_annotation(
-                                    x=rr["Adj Label"],
-                                    y=y_max * 1.18,
-                                    text=f"{rr['Evidence Icon']} {rr['Evidence Label']}",
-                                    showarrow=False,
-                                    font=dict(size=11, color="#cbd5e1"),
-                                )
                             fig_px.update_layout(
                                 margin=dict(l=0, r=0, t=48, b=0),
                                 yaxis_tickformat=".0%",
@@ -3573,6 +3561,7 @@ def main() -> None:
                                 plot_bgcolor="rgba(0,0,0,0)",
                             )
                             st.plotly_chart(fig_px, use_container_width=True, key=f"tab4_px_chart_{state_s}_{channel_s}_{segment_s}")
+                            st.caption("Evidence icons in tooltip: 🟢/🟡 = State+Channel stat-sig, 🔷 = Channel fallback stat-sig.")
                             st.markdown("<div class='px-sep'></div>", unsafe_allow_html=True)
                             st.markdown("<div class='px-subhead'>Testing Point Table</div>", unsafe_allow_html=True)
 
