@@ -3468,7 +3468,6 @@ def main() -> None:
                                 (
                                     "<div class='px-detail-shell'>"
                                     f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
-                                    f"<div class='px-sub'>Stat-sig source: {sdet['Source Used'].iloc[0]}</div>"
                                     f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
                                     "</div>"
                                 ),
@@ -3492,8 +3491,12 @@ def main() -> None:
                             sdet = sdet.sort_values("Bid Adj %")
                             bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
                             bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
+                            bar_df["Test Bids"] = pd.to_numeric(sdet["Test Bids"], errors="coerce").fillna(0.0).values
+                            bar_df["Test Clicks"] = pd.to_numeric(sdet.get("Test Clicks", 0), errors="coerce").fillna(0.0).values
+                            bar_df["Bid Share"] = np.where(ch_bids > 0, bar_df["Test Bids"] / ch_bids, np.nan)
+                            bar_df["Click Share"] = np.where(ch_clicks > 0, bar_df["Test Clicks"] / ch_clicks, np.nan)
                             melted = bar_df.melt(
-                                id_vars=["Adj Label", "Sig Icon", "Sig Level"],
+                                id_vars=["Adj Label", "Sig Icon", "Sig Level", "Test Bids", "Test Clicks", "Bid Share", "Click Share"],
                                 value_vars=["Win-Rate Uplift", "CPC Uplift"],
                                 var_name="Metric",
                                 value_name="Change",
@@ -3511,7 +3514,22 @@ def main() -> None:
                             fig_px.update_traces(
                                 texttemplate="%{y:.1%}",
                                 textposition="outside",
-                                hovertemplate="%{x}<br>%{fullData.name}: %{y:.2%}<extra></extra>",
+                                customdata=np.stack(
+                                    [
+                                        melted["Test Bids"].to_numpy(),
+                                        melted["Bid Share"].to_numpy(),
+                                        melted["Test Clicks"].to_numpy(),
+                                        melted["Click Share"].to_numpy(),
+                                    ],
+                                    axis=-1,
+                                ),
+                                hovertemplate=(
+                                    "%{x}<br>"
+                                    "%{fullData.name}: %{y:.2%}<br>"
+                                    "Test Bids: %{customdata[0]:,.0f} (%{customdata[1]:.1%} of total)<br>"
+                                    "Test Clicks: %{customdata[2]:,.0f} (%{customdata[3]:.1%} of total)"
+                                    "<extra></extra>"
+                                ),
                             )
                             y_max = max(
                                 float(pd.to_numeric(melted["Change"], errors="coerce").fillna(0).max()),
