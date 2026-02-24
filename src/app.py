@@ -3379,8 +3379,8 @@ def main() -> None:
                 st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
-                    summary_ph = st.empty()
                     with fixed_height_container(panel_height, key="tab4_cards_scroll"):
+                        summary_ph = st.empty()
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
                             card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
@@ -3437,7 +3437,7 @@ def main() -> None:
                 adj_txt = "n/a" if pd.isna(adj_val) else f"{adj_val:+.0f}% ({source_txt})"
                 summary_ph.markdown(
                     (
-                        "<div class='px-detail-shell'>"
+                        "<div class='px-detail-shell' style='margin-bottom:8px;'>"
                         f"<div class='px-title'>{state_s} · {channel_s} · {segment_s}</div>"
                         f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
                         "</div>"
