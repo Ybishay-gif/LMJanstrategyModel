@@ -1890,7 +1890,7 @@ def main() -> None:
         profit_weight = st.slider("Profitability weight", 0.0, 1.0, 0.30, 0.05)
 
         st.markdown("**Guardrails**")
-        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 40, 25, 1)
+        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 45, 45, 1)
         min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
         optimization_mode = st.session_state.get("global_optimization_mode", "Balanced")
