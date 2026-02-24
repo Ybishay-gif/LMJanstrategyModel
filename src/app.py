@@ -1039,6 +1039,19 @@ def parse_adj_from_label(label: str) -> Optional[float]:
         return None
 
 
+def as_float(v, default: float = 0.0) -> float:
+    try:
+        if pd.isna(v):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def close_adj(a: float, b: float, tol: float = 0.01) -> bool:
+    return abs(float(a) - float(b)) <= tol
+
+
 def nearest_available_adj(channel_group: str, target_adj: float, popup_state_df: pd.DataFrame) -> tuple[float, str]:
     if popup_state_df is None or popup_state_df.empty:
         return float(target_adj), "No test-point list found; used requested value."
@@ -2163,6 +2176,7 @@ def main() -> None:
                         table_df["Adj Selection"] = ""
                         table_df["Adj Options"] = [[] for _ in range(len(table_df))]
                         table_df["Adj Options JSON"] = ["[]" for _ in range(len(table_df))]
+                        table_df["Adj Map JSON"] = ["{}" for _ in range(len(table_df))]
                         for idx, rr in table_df.iterrows():
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
@@ -2173,23 +2187,43 @@ def main() -> None:
                             ch = str(rr["Channel Groups"])
                             ch_opts = popup_state_df[popup_state_df["Channel Groups"] == ch] if not popup_state_df.empty else pd.DataFrame()
                             labels = []
+                            label_to_adj = {}
                             for _, op in ch_opts.iterrows():
-                                labels.append(
-                                    format_adj_option_label(
-                                        float(op.get("Bid Adj %", 0) or 0),
-                                        float(op.get("Win Rate Uplift", 0) or 0),
-                                        float(op.get("CPC Uplift", 0) or 0),
-                                        op.get("CPB Impact", np.nan),
-                                        str(op.get("Sig Level", "")),
-                                    )
+                                ladj = float(op.get("Bid Adj %", 0) or 0)
+                                ll = format_adj_option_label(
+                                    ladj,
+                                    float(op.get("Win Rate Uplift", 0) or 0),
+                                    float(op.get("CPC Uplift", 0) or 0),
+                                    op.get("CPB Impact", np.nan),
+                                    str(op.get("Sig Level", "")),
                                 )
+                                labels.append(ll)
+                                label_to_adj[ll] = ladj
                             if not labels:
                                 base_adj = float(table_df.at[idx, "Selected Price Adj."])
-                                labels = [f"{base_adj:+.0f}%: n/a Clicks || n/a CPC || n/a CPB (no stat-sig)"]
+                                ll = f"{base_adj:+.0f}%: n/a Clicks || n/a CPC || n/a CPB (no stat-sig)"
+                                labels = [ll]
+                                label_to_adj[ll] = base_adj
+                            current_adj = float(table_df.at[idx, "Selected Price Adj."])
+                            has_current = any(
+                                close_adj(as_float(label_to_adj.get(lb, parse_adj_from_label(lb))), current_adj)
+                                for lb in labels
+                            )
+                            if not has_current:
+                                fallback = f"{current_adj:+.0f}%: model recommendation (no matched stat-sig option)"
+                                labels = [fallback] + labels
+                                label_to_adj[fallback] = current_adj
                             table_df.at[idx, "Adj Options"] = labels
                             table_df.at[idx, "Adj Options JSON"] = json.dumps(labels)
-                            current_adj = float(table_df.at[idx, "Selected Price Adj."])
-                            selected_label = next((lb for lb in labels if parse_adj_from_label(lb) == current_adj), labels[0])
+                            table_df.at[idx, "Adj Map JSON"] = json.dumps(label_to_adj)
+                            selected_label = next(
+                                (
+                                    lb
+                                    for lb in labels
+                                    if close_adj(as_float(label_to_adj.get(lb, parse_adj_from_label(lb))), current_adj)
+                                ),
+                                labels[0],
+                            )
                             table_df.at[idx, "Adj Selection"] = selected_label
                             # For manual selections, force row-level expected metrics from the same
                             # state+channel adjustment candidate set used in the dropdown.
@@ -2224,6 +2258,7 @@ def main() -> None:
                                 "Selection Source",
                                 "Adj Options",
                                 "Adj Options JSON",
+                                "Adj Map JSON",
                             ]
                         ]
                         for c in [
@@ -2250,7 +2285,9 @@ def main() -> None:
                         if isinstance(prev, pd.DataFrame) and "Channel Groups" in prev.columns:
                             if set(prev["Channel Groups"].astype(str)) == set(edited["Channel Groups"].astype(str)):
                                 edited = prev.copy()
-                        if AGGRID_AVAILABLE:
+                        # Reliability-first mode: use Streamlit data_editor for deterministic edit/save behavior.
+                        use_aggrid_for_state_table = False
+                        if AGGRID_AVAILABLE and use_aggrid_for_state_table:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_grid_options(singleClickEdit=True, stopEditingWhenCellsLoseFocus=True)
@@ -2296,6 +2333,7 @@ def main() -> None:
                             gb.configure_column("Selection Source", editable=False, width=108)
                             gb.configure_column("Adj Options", hide=True)
                             gb.configure_column("Adj Options JSON", hide=True)
+                            gb.configure_column("Adj Map JSON", hide=True)
                             go = gb.build()
                             custom_css = {
                                 ".ag-root-wrapper": {"background-color": "#0b1220", "border": "1px solid #1f2937", "border-radius": "10px"},
@@ -2350,6 +2388,7 @@ def main() -> None:
                                     "Selection Source": st.column_config.TextColumn("Selection Source", disabled=True),
                                     "Adj Options": None,
                                     "Adj Options JSON": None,
+                                    "Adj Map JSON": None,
                                 },
                             )
                             st.session_state[draft_key] = edited
@@ -2358,15 +2397,34 @@ def main() -> None:
                                 selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
                         # Stage dropdown selections in rows (apply on Save).
                         for i, rr in edited.iterrows():
-                            adj = parse_adj_from_label(rr.get("Adj Selection", ""))
-                            if adj is not None:
-                                rec_adj = float(rr.get("Rec Bid Adj", 0.0) or 0.0)
+                            adj_map = {}
+                            try:
+                                adj_map = json.loads(rr.get("Adj Map JSON", "{}") or "{}")
+                            except Exception:
+                                adj_map = {}
+                            sel_label = rr.get("Adj Selection", "")
+                            adj = as_float(adj_map.get(sel_label, parse_adj_from_label(sel_label)), np.nan)
+                            if pd.notna(adj):
+                                rec_adj = as_float(rr.get("Rec Bid Adj", 0.0), 0.0)
                                 edited.at[i, "Selected Price Adj"] = float(adj)
-                                if abs(float(adj) - rec_adj) > 1e-9:
+                                if not close_adj(float(adj), rec_adj):
                                     edited.at[i, "Selection Source"] = "Manual adjustment"
                                     edited.at[i, "Apply"] = True
                                 elif not to_bool(rr.get("Apply", False)):
                                     edited.at[i, "Selection Source"] = "Suggested"
+
+                                # Keep expected columns in sync with selected adjustment for preview.
+                                ch = str(rr.get("Channel Groups", ""))
+                                ch_opts = popup_state_df[popup_state_df["Channel Groups"] == ch] if not popup_state_df.empty else pd.DataFrame()
+                                if not ch_opts.empty:
+                                    mm = ch_opts.copy()
+                                    mm["dist"] = (pd.to_numeric(mm["Bid Adj %"], errors="coerce").fillna(0.0) - float(adj)).abs()
+                                    best = mm.sort_values(["dist", "Bid Adj %"], ascending=[True, True]).iloc[0]
+                                    edited.at[i, "Expected Additional Clicks"] = as_float(best.get("Additional Clicks"), as_float(rr.get("Expected Additional Clicks"), 0.0))
+                                    edited.at[i, "Expected Additional Binds"] = as_float(best.get("Additional Binds"), as_float(rr.get("Expected Additional Binds"), 0.0))
+                                    edited.at[i, "CPC Lift %"] = as_float(best.get("CPC Uplift"), as_float(rr.get("CPC Lift %"), 0.0))
+                                    edited.at[i, "Expected Total Cost"] = as_float(best.get("Expected Total Cost"), as_float(rr.get("Expected Total Cost"), 0.0))
+                                    edited.at[i, "Additional Budget Needed"] = as_float(best.get("Additional Budget Needed"), as_float(rr.get("Additional Budget Needed"), 0.0))
                         st.session_state[draft_key] = edited
                         selected_rows = edited[edited["Select"].map(to_bool)] if "Select" in edited.columns else pd.DataFrame()
                         if not selected_rows.empty:
@@ -2436,32 +2494,20 @@ def main() -> None:
                             audit_rows = []
                             for _, rr in edited.iterrows():
                                 okey = f"{selected_state}|{rr['Channel Groups']}"
-                                adj_from_dropdown = parse_adj_from_label(rr.get("Adj Selection", ""))
-                                rec_adj = float(rr.get("Rec Bid Adj", 0.0) or 0.0)
+                                adj_map = {}
+                                try:
+                                    adj_map = json.loads(rr.get("Adj Map JSON", "{}") or "{}")
+                                except Exception:
+                                    adj_map = {}
+                                sel_label = rr.get("Adj Selection", "")
+                                adj_from_dropdown = adj_map.get(sel_label, parse_adj_from_label(sel_label))
+                                rec_adj = as_float(rr.get("Rec Bid Adj", 0.0), 0.0)
                                 prev = prev_overrides.get(okey, {})
-                                prev_adj = float(prev.get("adj", rec_adj)) if isinstance(prev, dict) else rec_adj
-                                if adj_from_dropdown is not None and abs(float(adj_from_dropdown) - rec_adj) > 1e-9:
-                                    req_adj = float(adj_from_dropdown)
-                                    applied_adj, msg = nearest_available_adj(rr["Channel Groups"], req_adj, popup_state_df)
-                                    new_overrides[okey] = {
-                                        "apply": True,
-                                        "adj": float(applied_adj),
-                                        "requested_adj": float(req_adj),
-                                        "source": "manual",
-                                    }
-                                    audit_rows.append(
-                                        {
-                                            "State": selected_state,
-                                            "Channel Groups": rr["Channel Groups"],
-                                            "Previous Adj %": prev_adj,
-                                            "Requested Adj %": req_adj,
-                                            "Applied Adj %": applied_adj,
-                                            "Status": "Saved",
-                                            "Note": msg,
-                                        }
-                                    )
-                                elif to_bool(rr.get("Apply", False)):
-                                    req_adj = float(rr.get("Selected Price Adj", rec_adj) or rec_adj)
+                                prev_adj = as_float(prev.get("adj", rec_adj), rec_adj) if isinstance(prev, dict) else rec_adj
+                                selected_adj = as_float(rr.get("Selected Price Adj", rec_adj), rec_adj)
+                                req_adj = as_float(adj_from_dropdown, selected_adj)
+                                is_manual = (not close_adj(req_adj, rec_adj)) or to_bool(rr.get("Apply", False))
+                                if is_manual:
                                     applied_adj, msg = nearest_available_adj(rr["Channel Groups"], req_adj, popup_state_df)
                                     new_overrides[okey] = {
                                         "apply": True,
@@ -2486,7 +2532,11 @@ def main() -> None:
                             for k in set(prev_overrides.keys()) & set(new_overrides.keys()):
                                 a = prev_overrides.get(k, {})
                                 b = new_overrides.get(k, {})
-                                if bool(a.get("apply", False)) != bool(b.get("apply", False)) or abs(float(a.get("adj", 0.0)) - float(b.get("adj", 0.0))) > 1e-9:
+                                if (
+                                    bool(a.get("apply", False)) != bool(b.get("apply", False))
+                                    or (not close_adj(as_float(a.get("adj", 0.0), 0.0), as_float(b.get("adj", 0.0), 0.0)))
+                                    or (not close_adj(as_float(a.get("requested_adj", a.get("adj", 0.0)), 0.0), as_float(b.get("requested_adj", b.get("adj", 0.0)), 0.0)))
+                                ):
                                     changed_keys.add(k)
                             changed_rows = len(changed_keys)
                             with st.spinner("Saving adjustments and recalculating..."):
