@@ -8,6 +8,7 @@ import secrets
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from urllib.parse import urlencode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -1821,6 +1822,75 @@ def render_settings_panel() -> None:
                 st.rerun()
 
 
+def qp_value(name: str, default: str = "") -> str:
+    v = st.query_params.get(name, default)
+    if isinstance(v, list):
+        return str(v[0]) if v else str(default)
+    return str(v) if v is not None else str(default)
+
+
+def build_query_url(updates: dict[str, Optional[str]]) -> str:
+    params: dict[str, str] = {}
+    for k in st.query_params.keys():
+        vv = st.query_params.get(k)
+        if isinstance(vv, list):
+            vv = vv[0] if vv else ""
+        if vv is None:
+            continue
+        params[str(k)] = str(vv)
+    for k, v in updates.items():
+        if v is None or str(v) == "":
+            params.pop(k, None)
+        else:
+            params[k] = str(v)
+    q = urlencode(params)
+    return f"?{q}" if q else "?"
+
+
+def perform_logout() -> None:
+    u = normalize_email(st.session_state.get("auth_user", ""))
+    users = load_auth_users()
+    rec = users.get(u, {}) if isinstance(users.get(u), dict) else {}
+    rec["session_token"] = ""
+    rec["session_expires_at"] = ""
+    users[u] = rec
+    save_auth_users(users)
+    st.session_state["auth_ok"] = False
+    st.session_state["auth_user"] = ""
+    st.session_state["auth_stage"] = "email"
+    st.session_state["auth_email"] = ""
+    st.session_state["show_settings"] = False
+    for k in ("session_token", "view", "action"):
+        if k in st.query_params:
+            del st.query_params[k]
+    st.rerun()
+
+
+def render_top_icons(is_admin: bool, settings_view: bool = False) -> None:
+    logout_url = build_query_url({"action": "logout", "view": None})
+    settings_url = build_query_url({"view": "settings", "action": None}) if is_admin else ""
+    back_url = build_query_url({"view": "main", "action": None})
+    settings_icon = (
+        f"<a href='{settings_url}' title='Settings' style='text-decoration:none;font-size:1.35rem;line-height:1;cursor:pointer;'>⚙️</a>"
+        if is_admin
+        else "<span title='Settings (admin only)' style='opacity:.35;font-size:1.35rem;line-height:1;cursor:not-allowed;'>⚙️</span>"
+    )
+    left_icon = (
+        f"<a href='{back_url}' title='Back' style='text-decoration:none;font-size:1.35rem;line-height:1;cursor:pointer;'>⬅️</a>"
+        if settings_view
+        else settings_icon
+    )
+    st.markdown(
+        (
+            "<div style='display:flex;justify-content:flex-end;align-items:center;gap:14px;padding-top:4px;'>"
+            f"{left_icon}"
+            f"<a href='{logout_url}' title='Logout' style='text-decoration:none;font-size:1.35rem;line-height:1;cursor:pointer;'>🚪</a>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def nearest_available_adj(channel_group: str, target_adj: float, popup_state_df: pd.DataFrame) -> tuple[float, str]:
     if popup_state_df is None or popup_state_df.empty:
         return float(target_adj), "No test-point list found; used requested value."
@@ -2200,28 +2270,16 @@ def main() -> None:
     if not render_auth_gate():
         return
 
+    action = qp_value("action", "")
+    if action == "logout":
+        perform_logout()
+        return
+
+    user_now = normalize_email(st.session_state.get("auth_user", ""))
+    is_admin = user_now == ADMIN_EMAIL
+    view = qp_value("view", "main").strip().lower() or "main"
+
     with st.sidebar:
-        user_now = normalize_email(st.session_state.get("auth_user", ""))
-        is_admin = user_now == ADMIN_EMAIL
-        s1, s2 = st.columns(2)
-        if s1.button("⚙️ Settings", key="auth_settings_btn", use_container_width=True, disabled=not is_admin):
-            st.session_state["show_settings"] = not st.session_state.get("show_settings", False)
-        if s2.button("🚪 Logout", key="auth_logout_btn", use_container_width=True):
-            u = normalize_email(st.session_state.get("auth_user", ""))
-            users = load_auth_users()
-            rec = users.get(u, {}) if isinstance(users.get(u), dict) else {}
-            rec["session_token"] = ""
-            rec["session_expires_at"] = ""
-            users[u] = rec
-            save_auth_users(users)
-            st.session_state["auth_ok"] = False
-            st.session_state["auth_user"] = ""
-            st.session_state["auth_stage"] = "email"
-            st.session_state["auth_email"] = ""
-            st.session_state["show_settings"] = False
-            if "session_token" in st.query_params:
-                del st.query_params["session_token"]
-            st.rerun()
         st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
         st.divider()
         dark_mode = st.toggle("Dark mode", value=True)
@@ -2230,10 +2288,13 @@ def main() -> None:
 
     plotly_template = "plotly_dark" if dark_mode else "plotly_white"
 
-    st.title("Insurance Growth Navigator")
-    if st.session_state.get("show_settings", False):
+    render_top_icons(is_admin=is_admin, settings_view=(view == "settings"))
+    if view == "settings":
+        st.title("Settings")
         render_settings_panel()
-        st.divider()
+        return
+
+    st.title("Insurance Growth Navigator")
     st.markdown(
         """
         <div class="hero-card">
