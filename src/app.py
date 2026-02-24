@@ -1337,6 +1337,46 @@ def nearest_available_adj(channel_group: str, target_adj: float, popup_state_df:
     return mapped, "Exact test point."
 
 
+def _kpi_text(v) -> str:
+    if isinstance(v, str):
+        return v
+    if v is None or pd.isna(v):
+        return "n/a"
+    return str(v)
+
+
+def render_kpi_tiles(items: list[dict], cols: int = 4) -> None:
+    if not items:
+        return
+    for i in range(0, len(items), cols):
+        row = items[i:i + cols]
+        c = st.columns(cols)
+        for j in range(cols):
+            if j >= len(row):
+                continue
+            it = row[j]
+            label = _kpi_text(it.get("label", ""))
+            value = _kpi_text(it.get("value", "n/a"))
+            sub = _kpi_text(it.get("sub", ""))
+            c[j].markdown(
+                (
+                    "<div class='kpi-tile'>"
+                    f"<div class='kpi-label'>{label}</div>"
+                    f"<div class='kpi-value'>{value}</div>"
+                    f"<div class='kpi-sub'>{sub}</div>"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+
+
+def fixed_height_container(height: int, key: str = "scroll_box"):
+    try:
+        return st.container(height=height, border=True, key=key)
+    except TypeError:
+        return st.container(border=True)
+
+
 def to_bool(v) -> bool:
     if isinstance(v, (bool, np.bool_)):
         return bool(v)
@@ -1733,6 +1773,37 @@ def main() -> None:
         dark_mode = st.toggle("Dark mode", value=True)
         fast_mode = st.toggle("Fast interaction mode", value=True, help="Reduces heavy chart rendering for faster clicks/saves.")
     st.markdown(DARK_CSS if dark_mode else LIGHT_CSS, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        .kpi-tile {
+            border: 1px solid rgba(56,189,248,0.24);
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: linear-gradient(145deg, rgba(15,23,42,0.78), rgba(17,24,39,0.62));
+            min-height: 84px;
+            margin-bottom: 8px;
+        }
+        .kpi-label {
+            color: #93c5fd;
+            font-size: 0.78rem;
+            margin-bottom: 4px;
+        }
+        .kpi-value {
+            color: #e2e8f0;
+            font-weight: 700;
+            font-size: 1.22rem;
+            line-height: 1.15;
+            margin-bottom: 2px;
+        }
+        .kpi-sub {
+            color: #94a3b8;
+            font-size: 0.72rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     plotly_template = "plotly_dark" if dark_mode else "plotly_white"
 
@@ -1985,21 +2056,23 @@ def main() -> None:
         add_binds = float(pd.to_numeric(sim_all["Expected Additional Binds"], errors="coerce").fillna(0).sum())
         add_budget = float(pd.to_numeric(sim_all["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
 
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Total Clicks", f"{total_clicks:,.0f}")
-        k2.metric("Avg Win Rate", "n/a" if pd.isna(avg_win_rate) else f"{avg_win_rate:.1%}")
-        k3.metric("Cost", f"${total_cost:,.0f}")
-        k4.metric("Avg Q2B", "n/a" if pd.isna(avg_q2b) else f"{avg_q2b:.1%}")
-        k5.metric("Binds", f"{total_binds:,.0f}")
-        k6, k7, k8, k9 = st.columns(4)
-        k6.metric("CPB", "n/a" if pd.isna(cpb) else f"${cpb:,.0f}")
-        k7.metric("ROE", "n/a" if pd.isna(roe_w) else f"{roe_w:.1%}")
-        k8.metric("Combined Ratio", "n/a" if pd.isna(cr_w) else f"{cr_w:.1%}")
-        k9.metric("LTV", "n/a" if pd.isna(ltv_w) else f"${ltv_w:,.0f}")
-        k10, k11, k12 = st.columns(3)
-        k10.metric("Additional Clicks", f"{add_clicks:,.0f}")
-        k11.metric("Additional Binds", f"{add_binds:,.1f}")
-        k12.metric("Required Budget", f"${add_budget:,.0f}")
+        render_kpi_tiles(
+            [
+                {"label": "Total Clicks", "value": f"{total_clicks:,.0f}"},
+                {"label": "Avg Win Rate", "value": "n/a" if pd.isna(avg_win_rate) else f"{avg_win_rate:.1%}"},
+                {"label": "Cost", "value": f"${total_cost:,.0f}"},
+                {"label": "Avg Q2B", "value": "n/a" if pd.isna(avg_q2b) else f"{avg_q2b:.1%}"},
+                {"label": "Binds", "value": f"{total_binds:,.0f}"},
+                {"label": "CPB", "value": "n/a" if pd.isna(cpb) else f"${cpb:,.0f}"},
+                {"label": "ROE", "value": "n/a" if pd.isna(roe_w) else f"{roe_w:.1%}"},
+                {"label": "Combined Ratio", "value": "n/a" if pd.isna(cr_w) else f"{cr_w:.1%}"},
+                {"label": "LTV", "value": "n/a" if pd.isna(ltv_w) else f"${ltv_w:,.0f}"},
+                {"label": "Additional Clicks", "value": f"{add_clicks:,.0f}"},
+                {"label": "Additional Binds", "value": f"{add_binds:,.1f}"},
+                {"label": "Required Budget", "value": f"${add_budget:,.0f}"},
+            ],
+            cols=4,
+        )
 
         map_mode0 = st.radio(
             "Map color mode",
@@ -2385,11 +2458,15 @@ def main() -> None:
 
             with st.container(border=True):
                 st.subheader(f"🔎 State Deep Dive: {selected_state}  |  Strategy: {row['Strategy Bucket'].iloc[0]}")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("💸 ROE", f"{row['ROE'].iloc[0]:.1%}")
-                c2.metric("⚖️ Combined Ratio", f"{row['Combined Ratio'].iloc[0]:.1%}")
-                c3.metric("🧷 Binds", f"{row['Binds'].iloc[0]:,.0f}")
-                c4.metric("💎 Avg LTV", f"${row['Avg. MRLTV'].iloc[0]:,.0f}")
+                render_kpi_tiles(
+                    [
+                        {"label": "ROE", "value": f"{row['ROE'].iloc[0]:.1%}"},
+                        {"label": "Combined Ratio", "value": f"{row['Combined Ratio'].iloc[0]:.1%}"},
+                        {"label": "Binds", "value": f"{row['Binds'].iloc[0]:,.0f}"},
+                        {"label": "Avg LTV", "value": f"${row['Avg. MRLTV'].iloc[0]:,.0f}"},
+                    ],
+                    cols=4,
+                )
                 tone = row["Performance Tone"].iloc[0]
                 arrow = row["Conflict Arrow"].iloc[0]
                 lvl = row["Conflict Level"].iloc[0]
@@ -2401,17 +2478,20 @@ def main() -> None:
                     f" <span style='color:#9ca3af;'>Strategy vs actual performance</span></div>",
                     unsafe_allow_html=True,
                 )
-
-                c5, c6, c7, c8, c9 = st.columns(5)
-                c5.metric("🖱️ Current Clicks", f"{state_current_clicks:,.0f}")
-                c6.metric(
-                    "✨ Additional Clicks",
-                    f"{state_add_clicks:,.0f}",
-                    delta="n/a" if pd.isna(state_add_clicks_pct) else f"{state_add_clicks_pct:.1%}",
+                render_kpi_tiles(
+                    [
+                        {"label": "Current Clicks", "value": f"{state_current_clicks:,.0f}"},
+                        {
+                            "label": "Additional Clicks",
+                            "value": f"{state_add_clicks:,.0f}",
+                            "sub": "n/a" if pd.isna(state_add_clicks_pct) else f"{state_add_clicks_pct:.1%}",
+                        },
+                        {"label": "Additional Binds", "value": f"{state_add_binds:,.1f}"},
+                        {"label": "Additional Budget Needed", "value": f"${state_add_budget:,.0f}"},
+                        {"label": "Budget Impact", "value": "n/a" if pd.isna(state_add_budget_pct) else f"{state_add_budget_pct:.1%}"},
+                    ],
+                    cols=5,
                 )
-                c7.metric("🎉 Additional Binds", f"{state_add_binds:,.1f}")
-                c8.metric("💰 Additional Budget Needed", f"${state_add_budget:,.0f}")
-                c9.metric("📊 Budget Impact", "n/a" if pd.isna(state_add_budget_pct) else f"{state_add_budget_pct:.1%}")
 
                 st.markdown("**🧩 Per-Segment KPI + Opportunity**")
                 seg_show = seg_view[[
@@ -3153,6 +3233,18 @@ def main() -> None:
                 margin-bottom: 6px !important;
                 white-space: pre-line !important;
             }
+            [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar {
+                width: 10px;
+            }
+            [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-track {
+                background: rgba(15,23,42,0.55);
+                border-radius: 999px;
+            }
+            [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-thumb {
+                background: linear-gradient(180deg, rgba(45,212,191,0.85), rgba(56,189,248,0.85));
+                border-radius: 999px;
+                border: 2px solid rgba(15,23,42,0.65);
+            }
             [class*="st-key-px_card_"] button:hover {
                 border-color: rgba(45,212,191,1.0) !important;
                 transform: translateY(-1px);
@@ -3230,31 +3322,31 @@ def main() -> None:
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
                     st.markdown("**Master Cards**")
-                    max_points_page = max(float(pd.to_numeric(page_df["Testing Points Count"], errors="coerce").fillna(1).max()), 1.0)
-                    for _, r in page_df.iterrows():
-                        card_key = f"{r['State']}|{r['Channel Groups']}|{r['Segment']}"
-                        active = card_key == st.session_state.get("px_selected_card_key")
-                        points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
-                        point_boxes = " ".join([f"`{p}`" for p in points[:6]])
-                        readiness = int(round(100.0 * float(r["Testing Points Count"]) / max_points_page))
-                        header_line = f"**{r['State']} {r['Segment']}**"
-                        group_line = f"**{r['Channel Groups']}**"
-                        meta_line = f"Bids {r['Total Bids']:,.0f} | Clicks {r['Total Clicks']:,.0f} | {r['Source Used']}"
-                        card_label = (
-                            f"`{readiness}%`  Bidding Group\n"
-                            f"{header_line}\n"
-                            f"{group_line}\n"
-                            f"{meta_line}\n"
-                            f"Test points: {point_boxes}   {int(r['Testing Points Count'])}"
-                        )
-                        if st.button(
-                            card_label,
-                            key=f"px_card_{card_key}",
-                            use_container_width=True,
-                            type="primary" if active else "secondary",
-                        ):
-                            st.session_state["px_selected_card_key"] = card_key
-                            selected_key = card_key
+                    with fixed_height_container(780, key="tab4_cards_scroll"):
+                        for _, r in page_df.iterrows():
+                            ch_name = r["Channel Groups"]
+                            card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
+                            active = card_key == st.session_state.get("px_selected_card_key")
+                            points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
+                            point_boxes = " ".join([f"[{p}]" for p in points[:7]])
+                            header_line = f"{r['State']} · {ch_name}"
+                            stats_line = f"Bids {r['Total Bids']:,.0f}   Clicks {r['Total Clicks']:,.0f}   Binds {r['Total Binds']:,.0f}"
+                            segment_line = f"Segment {r['Segment']}   Source {r['Source Used']}"
+                            card_label = (
+                                f"Bidding Group\n"
+                                f"{header_line}\n"
+                                f"{stats_line}\n"
+                                f"{segment_line}\n"
+                                f"{point_boxes}"
+                            )
+                            if st.button(
+                                card_label,
+                                key=f"px_card_{card_key}",
+                                use_container_width=True,
+                                type="primary" if active else "secondary",
+                            ):
+                                st.session_state["px_selected_card_key"] = card_key
+                                selected_key = card_key
 
                 with right:
                     detail_lookup = build_price_exploration_detail_lookup(detail_df)
@@ -3296,15 +3388,18 @@ def main() -> None:
                             ),
                             unsafe_allow_html=True,
                         )
-                        k1, k2, k3, k4 = st.columns(4)
-                        k1.metric("State-Segment ROE", "n/a" if pd.isna(seg_roe) else f"{seg_roe:.1%}")
-                        k2.metric("State-Segment MRLTV", "n/a" if pd.isna(seg_ltv) else f"${seg_ltv:,.0f}")
-                        k3.metric("State-Segment CPB", "n/a" if pd.isna(seg_cpb) else f"${seg_cpb:,.0f}")
-                        k4.metric("State-Segment Binds", "n/a" if pd.isna(seg_binds) else f"{seg_binds:,.0f}")
-                        k5, k6, k7 = st.columns(3)
-                        k5.metric("Channel Bids", f"{ch_bids:,.0f}")
-                        k6.metric("Channel Win Rate", "n/a" if pd.isna(ch_wr) else f"{ch_wr:.2%}")
-                        k7.metric("Channel SOV", "n/a" if pd.isna(ch_sov) else f"{ch_sov:.1%}")
+                        render_kpi_tiles(
+                            [
+                                {"label": "State-Segment ROE", "value": "n/a" if pd.isna(seg_roe) else f"{seg_roe:.1%}"},
+                                {"label": "State-Segment MRLTV", "value": "n/a" if pd.isna(seg_ltv) else f"${seg_ltv:,.0f}"},
+                                {"label": "State-Segment CPB", "value": "n/a" if pd.isna(seg_cpb) else f"${seg_cpb:,.0f}"},
+                                {"label": "State-Segment Binds", "value": "n/a" if pd.isna(seg_binds) else f"{seg_binds:,.0f}"},
+                                {"label": "Channel Bids", "value": f"{ch_bids:,.0f}"},
+                                {"label": "Channel Win Rate", "value": "n/a" if pd.isna(ch_wr) else f"{ch_wr:.2%}"},
+                                {"label": "Channel SOV", "value": "n/a" if pd.isna(ch_sov) else f"{ch_sov:.1%}"},
+                            ],
+                            cols=4,
+                        )
                         sdet = sdet.sort_values("Bid Adj %")
                         bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
                         bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
