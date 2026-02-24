@@ -2349,11 +2349,11 @@ def main() -> None:
                                 allow_unsafe_jscode=True,
                                 update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
                                 fit_columns_on_grid_load=True,
-                                reload_data=False,
+                                reload_data=True,
                                 height=460,
                                 theme="balham-dark",
                                 custom_css=custom_css,
-                                key=f"tab1_aggrid_{selected_state}",
+                                key=f"tab1_aggrid_{selected_state}_{st.session_state.get(f'tab1_grid_refresh_{selected_state}', 0)}",
                             )
                             edited = pd.DataFrame(grid["data"])
                             st.session_state[draft_key] = edited
@@ -2610,6 +2610,9 @@ def main() -> None:
                             if audit_rows:
                                 st.session_state["tab1_save_audit"] = pd.DataFrame(audit_rows)
                             st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
+                            st.session_state[f"tab1_grid_refresh_{selected_state}"] = int(
+                                st.session_state.get(f"tab1_grid_refresh_{selected_state}", 0)
+                            ) + 1
                             st.rerun()
 
                         if st.session_state.get("tab1_save_notice"):
