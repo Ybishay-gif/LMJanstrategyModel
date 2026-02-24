@@ -40,7 +40,7 @@ def default_settings() -> Settings:
         max_adj_minimal=25,
         max_adj_constrained=15,
         min_clicks_intent_sig=80,
-        min_bids_price_sig=100,
+        min_bids_price_sig=75,
         min_clicks_price_sig=30,
         min_binds_perf_sig=8,
         optimization_mode="Balanced",

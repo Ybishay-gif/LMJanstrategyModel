@@ -1902,7 +1902,7 @@ def main() -> None:
 
         st.markdown("**Stat Sig Rules**")
         min_clicks_intent_sig = st.slider("Min clicks for intent significance", 10, 300, 80, 5)
-        min_bids_price_sig = st.slider("Min bids for price-test significance", 10, 500, 100, 10)
+        min_bids_price_sig = st.slider("Min bids for price-test significance", 10, 500, 75, 5)
         min_clicks_price_sig = st.slider("Min clicks for price-test significance", 5, 200, 30, 5)
         min_binds_perf_sig = st.slider("Min binds for state performance significance", 5, 10, 8, 1)
 
@@ -3521,14 +3521,18 @@ def main() -> None:
                                 "Sig Icon", "Sig Level", "Source Used", "Evidence Icon", "Evidence Label"
                             ]].copy()
                             bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
-                            bar_df["Test Bids"] = pd.to_numeric(sdet["Test Bids"], errors="coerce").fillna(0.0).values
-                            bar_df["Test Clicks"] = pd.to_numeric(sdet.get("Test Clicks", 0), errors="coerce").fillna(0.0).values
-                            bar_df["Bid Share"] = np.where(ch_bids > 0, bar_df["Test Bids"] / ch_bids, np.nan)
-                            bar_df["Click Share"] = np.where(ch_clicks > 0, bar_df["Test Clicks"] / ch_clicks, np.nan)
+                            # Decision KPIs always use state+channel volume; fallback only informs uplift deltas.
+                            bar_df["State Bids"] = pd.to_numeric(sdet.get("Bids", 0), errors="coerce").fillna(0.0).values
+                            bar_df["State Clicks"] = pd.to_numeric(sdet.get("Clicks", 0), errors="coerce").fillna(0.0).values
+                            bar_df["Evidence Bids"] = pd.to_numeric(sdet.get("Test Bids", 0), errors="coerce").fillna(0.0).values
+                            bar_df["Evidence Clicks"] = pd.to_numeric(sdet.get("Test Clicks", 0), errors="coerce").fillna(0.0).values
+                            bar_df["State Bid Share"] = np.where(ch_bids > 0, bar_df["State Bids"] / ch_bids, np.nan)
+                            bar_df["State Click Share"] = np.where(ch_clicks > 0, bar_df["State Clicks"] / ch_clicks, np.nan)
                             melted = bar_df.melt(
                                 id_vars=[
                                     "Adj Label", "Sig Icon", "Sig Level", "Source Used", "Evidence Icon", "Evidence Label",
-                                    "Test Bids", "Test Clicks", "Bid Share", "Click Share"
+                                    "State Bids", "State Clicks", "Evidence Bids", "Evidence Clicks",
+                                    "State Bid Share", "State Click Share"
                                 ],
                                 value_vars=["Win-Rate Uplift", "CPC Uplift"],
                                 var_name="Metric",
@@ -3549,10 +3553,12 @@ def main() -> None:
                                 textposition="outside",
                                 customdata=np.stack(
                                     [
-                                        melted["Test Bids"].to_numpy(),
-                                        melted["Bid Share"].to_numpy(),
-                                        melted["Test Clicks"].to_numpy(),
-                                        melted["Click Share"].to_numpy(),
+                                        melted["State Bids"].to_numpy(),
+                                        melted["State Bid Share"].to_numpy(),
+                                        melted["State Clicks"].to_numpy(),
+                                        melted["State Click Share"].to_numpy(),
+                                        melted["Evidence Bids"].to_numpy(),
+                                        melted["Evidence Clicks"].to_numpy(),
                                         melted["Source Used"].to_numpy(),
                                         melted["Sig Level"].to_numpy(),
                                     ],
@@ -3561,11 +3567,30 @@ def main() -> None:
                                 hovertemplate=(
                                     "%{x}<br>"
                                     "%{fullData.name}: %{y:.2%}<br>"
-                                    "Test Bids: %{customdata[0]:,.0f} (%{customdata[1]:.1%} of total)<br>"
-                                    "Test Clicks: %{customdata[2]:,.0f} (%{customdata[3]:.1%} of total)<br>"
-                                    "Evidence: %{customdata[4]} | Sig: %{customdata[5]}"
+                                    "State Bids: %{customdata[0]:,.0f} (%{customdata[1]:.1%} of total)<br>"
+                                    "State Clicks: %{customdata[2]:,.0f} (%{customdata[3]:.1%} of total)<br>"
+                                    "Evidence Sample Bids: %{customdata[4]:,.0f}<br>"
+                                    "Evidence Sample Clicks: %{customdata[5]:,.0f}<br>"
+                                    "Evidence: %{customdata[6]} | Sig: %{customdata[7]}"
                                     "<extra></extra>"
                                 ),
+                            )
+                            y_max = float(max(0.01, np.nanmax(np.abs(melted["Change"].to_numpy(dtype=float)))))
+                            icon_df = (
+                                bar_df[["Adj Label", "Evidence Icon", "Source Used"]]
+                                .drop_duplicates(subset=["Adj Label"])
+                                .copy()
+                            )
+                            icon_df["IconY"] = y_max * 1.18
+                            fig_px.add_scatter(
+                                x=icon_df["Adj Label"],
+                                y=icon_df["IconY"],
+                                mode="text",
+                                text=icon_df["Evidence Icon"],
+                                textposition="middle center",
+                                showlegend=False,
+                                hovertemplate="Evidence Source: %{customdata[0]}<extra></extra>",
+                                customdata=np.stack([icon_df["Source Used"].to_numpy()], axis=-1),
                             )
                             fig_px.update_layout(
                                 margin=dict(l=0, r=0, t=48, b=0),
@@ -3583,8 +3608,9 @@ def main() -> None:
 
                             tbl = sdet.copy()
                             tbl["Testing Point"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
-                            tbl["Bid"] = tbl["Test Bids"].map(lambda x: f"{float(x):,.0f}")
+                            tbl["State Bids"] = tbl["Bids"].map(lambda x: f"{float(x):,.0f}")
                             tbl["Stat-Sig"] = tbl["Sig Icon"].astype(str) + " " + tbl["Sig Level"].astype(str)
+                            tbl["Evidence Source"] = tbl["Source Used"].astype(str)
                             tbl["Win Rate Diff"] = tbl["Win Rate Uplift"].map(lambda x: f"{float(x):+.1%}")
                             tbl["Additional Clicks"] = tbl["Additional Clicks"].map(lambda x: f"{float(x):,.0f}")
                             tbl["Additional Bid"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
@@ -3593,8 +3619,9 @@ def main() -> None:
                             show_tbl = tbl[
                                 [
                                     "Testing Point",
-                                    "Bid",
+                                    "State Bids",
                                     "Stat-Sig",
+                                    "Evidence Source",
                                     "Win Rate Diff",
                                     "Additional Clicks",
                                     "Additional Bid",
