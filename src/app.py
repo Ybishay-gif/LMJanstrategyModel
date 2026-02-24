@@ -3254,11 +3254,30 @@ def main() -> None:
             [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar {
                 width: 10px;
             }
+            [class*="st-key-tab4_cards_scroll"] > div,
+            [class*="st-key-tab4_right_scroll"] > div {
+                border: 1px solid rgba(45,212,191,0.62) !important;
+                border-radius: 14px !important;
+                box-shadow: 0 0 0 1px rgba(45,212,191,0.18), 0 8px 24px rgba(2,6,23,0.35);
+                background: linear-gradient(145deg, rgba(10,16,28,0.64), rgba(10,16,28,0.38));
+            }
             [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-track {
                 background: rgba(15,23,42,0.55);
                 border-radius: 999px;
             }
             [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-thumb {
+                background: linear-gradient(180deg, rgba(45,212,191,0.85), rgba(56,189,248,0.85));
+                border-radius: 999px;
+                border: 2px solid rgba(15,23,42,0.65);
+            }
+            [class*="st-key-tab4_right_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar {
+                width: 10px;
+            }
+            [class*="st-key-tab4_right_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-track {
+                background: rgba(15,23,42,0.55);
+                border-radius: 999px;
+            }
+            [class*="st-key-tab4_right_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-thumb {
                 background: linear-gradient(180deg, rgba(45,212,191,0.85), rgba(56,189,248,0.85));
                 border-radius: 999px;
                 border: 2px solid rgba(15,23,42,0.65);
@@ -3270,6 +3289,16 @@ def main() -> None:
             [class*="st-key-px_card_"] button[kind="primary"] {
                 border-color: rgba(16,185,129,0.95) !important;
                 box-shadow: 0 0 0 1px rgba(16,185,129,0.52), 0 0 18px rgba(16,185,129,0.27), 0 10px 28px rgba(2,6,23,0.5) !important;
+            }
+            .px-sep {
+                border-top: 1px solid rgba(148,163,184,0.32);
+                margin: 10px 0 12px 0;
+            }
+            .px-subhead {
+                color: #93c5fd;
+                font-size: 0.86rem;
+                font-weight: 700;
+                margin: 2px 0 6px 0;
             }
             </style>
             """,
@@ -3336,11 +3365,12 @@ def main() -> None:
                 end_idx = min(start_idx + int(page_size), total_cards)
                 p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
                 page_df = filt_master.iloc[start_idx:end_idx].copy()
+                panel_height = 980
 
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
                     st.markdown("**Price Exploration Testing**")
-                    with fixed_height_container(780, key="tab4_cards_scroll"):
+                    with fixed_height_container(panel_height, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
                             card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
@@ -3370,128 +3400,133 @@ def main() -> None:
                                 selected_key = card_key
 
                 with right:
-                    st.markdown("**Selected Testing Detail**")
-                    detail_lookup = build_price_exploration_detail_lookup(detail_df)
-                    state_s, channel_s, segment_s = str(selected_key).split("|", 2)
-                    sdet = detail_lookup.get(selected_key, pd.DataFrame()).copy()
-                    if sdet.empty:
-                        st.info("No detail points found for the selected card.")
-                    else:
-                        seg_row = state_seg_df[
-                            (state_seg_df["State"] == state_s) & (state_seg_df["Segment"] == segment_s)
-                        ].head(1)
-                        if seg_row.empty:
-                            seg_roe = float(pd.to_numeric(sdet.get("ROE Proxy", np.nan), errors="coerce").mean())
-                            seg_ltv = float(pd.to_numeric(sdet.get("MRLTV Proxy", np.nan), errors="coerce").mean())
-                            seg_cpb = np.nan
-                            seg_binds = float(pd.to_numeric(sdet.get("Binds", 0), errors="coerce").max())
+                    with fixed_height_container(panel_height, key="tab4_right_scroll"):
+                        st.markdown("**Selected Testing Detail**")
+                        detail_lookup = build_price_exploration_detail_lookup(detail_df)
+                        state_s, channel_s, segment_s = str(selected_key).split("|", 2)
+                        sdet = detail_lookup.get(selected_key, pd.DataFrame()).copy()
+                        if sdet.empty:
+                            st.info("No detail points found for the selected card.")
                         else:
-                            seg_roe = float(pd.to_numeric(seg_row["ROE"], errors="coerce").iloc[0]) if "ROE" in seg_row.columns else np.nan
-                            seg_ltv = float(pd.to_numeric(seg_row["Avg. MRLTV"], errors="coerce").iloc[0]) if "Avg. MRLTV" in seg_row.columns else np.nan
-                            seg_cpb = float(pd.to_numeric(seg_row["CPB"], errors="coerce").iloc[0]) if "CPB" in seg_row.columns else np.nan
-                            seg_binds = float(pd.to_numeric(seg_row["Binds"], errors="coerce").iloc[0]) if "Binds" in seg_row.columns else np.nan
+                            seg_row = state_seg_df[
+                                (state_seg_df["State"] == state_s) & (state_seg_df["Segment"] == segment_s)
+                            ].head(1)
+                            if seg_row.empty:
+                                seg_roe = float(pd.to_numeric(sdet.get("ROE Proxy", np.nan), errors="coerce").mean())
+                                seg_ltv = float(pd.to_numeric(sdet.get("MRLTV Proxy", np.nan), errors="coerce").mean())
+                                seg_cpb = np.nan
+                                seg_binds = float(pd.to_numeric(sdet.get("Binds", 0), errors="coerce").max())
+                            else:
+                                seg_roe = float(pd.to_numeric(seg_row["ROE"], errors="coerce").iloc[0]) if "ROE" in seg_row.columns else np.nan
+                                seg_ltv = float(pd.to_numeric(seg_row["Avg. MRLTV"], errors="coerce").iloc[0]) if "Avg. MRLTV" in seg_row.columns else np.nan
+                                seg_cpb = float(pd.to_numeric(seg_row["CPB"], errors="coerce").iloc[0]) if "CPB" in seg_row.columns else np.nan
+                                seg_binds = float(pd.to_numeric(seg_row["Binds"], errors="coerce").iloc[0]) if "Binds" in seg_row.columns else np.nan
 
-                        ch_rows = rec_df[
-                            (rec_df["State"] == state_s)
-                            & (rec_df["Segment"] == segment_s)
-                            & (rec_df["Channel Groups"] == channel_s)
-                        ].copy()
-                        ch_bids = float(pd.to_numeric(ch_rows.get("Bids", 0), errors="coerce").fillna(0).sum())
-                        ch_clicks = float(pd.to_numeric(ch_rows.get("Clicks", 0), errors="coerce").fillna(0).sum())
-                        ch_wr = (ch_clicks / ch_bids) if ch_bids > 0 else np.nan
-                        ch_sov = float(pd.to_numeric(ch_rows.get("SOV", np.nan), errors="coerce").mean()) if not ch_rows.empty else np.nan
+                            ch_rows = rec_df[
+                                (rec_df["State"] == state_s)
+                                & (rec_df["Segment"] == segment_s)
+                                & (rec_df["Channel Groups"] == channel_s)
+                            ].copy()
+                            ch_bids = float(pd.to_numeric(ch_rows.get("Bids", 0), errors="coerce").fillna(0).sum())
+                            ch_clicks = float(pd.to_numeric(ch_rows.get("Clicks", 0), errors="coerce").fillna(0).sum())
+                            ch_wr = (ch_clicks / ch_bids) if ch_bids > 0 else np.nan
+                            ch_sov = float(pd.to_numeric(ch_rows.get("SOV", np.nan), errors="coerce").mean()) if not ch_rows.empty else np.nan
 
-                        st.markdown(
-                            (
-                                "<div class='px-detail-shell'>"
-                                f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
-                                f"<div class='px-sub'>Stat-sig source: {sdet['Source Used'].iloc[0]}</div>"
-                                "</div>"
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        render_kpi_tiles(
-                            [
-                                {"label": "State-Segment ROE", "value": "n/a" if pd.isna(seg_roe) else f"{seg_roe:.1%}"},
-                                {"label": "State-Segment MRLTV", "value": "n/a" if pd.isna(seg_ltv) else f"${seg_ltv:,.0f}"},
-                                {"label": "State-Segment CPB", "value": "n/a" if pd.isna(seg_cpb) else f"${seg_cpb:,.0f}"},
-                                {"label": "State-Segment Binds", "value": "n/a" if pd.isna(seg_binds) else f"{seg_binds:,.0f}"},
-                                {"label": "Channel Bids", "value": f"{ch_bids:,.0f}"},
-                                {"label": "Channel Win Rate", "value": "n/a" if pd.isna(ch_wr) else f"{ch_wr:.2%}"},
-                                {"label": "Channel SOV", "value": "n/a" if pd.isna(ch_sov) else f"{ch_sov:.1%}"},
-                            ],
-                            cols=4,
-                        )
-                        sdet = sdet.sort_values("Bid Adj %")
-                        bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
-                        bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
-                        melted = bar_df.melt(
-                            id_vars=["Adj Label", "Sig Icon", "Sig Level"],
-                            value_vars=["Win-Rate Uplift", "CPC Uplift"],
-                            var_name="Metric",
-                            value_name="Change",
-                        )
-                        fig_px = px.bar(
-                            melted,
-                            x="Adj Label",
-                            y="Change",
-                            color="Metric",
-                            barmode="group",
-                            color_discrete_map={"Win-Rate Uplift": "#22d3ee", "CPC Uplift": "#f59e0b"},
-                            template=plotly_template,
-                            title="Testing Point Impact: Win-Rate vs CPC",
-                        )
-                        fig_px.update_traces(
-                            texttemplate="%{y:.1%}",
-                            textposition="outside",
-                            hovertemplate="%{x}<br>%{fullData.name}: %{y:.2%}<extra></extra>",
-                        )
-                        y_max = max(
-                            float(pd.to_numeric(melted["Change"], errors="coerce").fillna(0).max()),
-                            0.02,
-                        )
-                        for _, rr in bar_df.iterrows():
-                            fig_px.add_annotation(
-                                x=rr["Adj Label"],
-                                y=y_max * 1.18,
-                                text=f"{rr['Sig Icon']} {rr['Sig Level']}",
-                                showarrow=False,
-                                font=dict(size=11, color="#cbd5e1"),
+                            st.markdown(
+                                (
+                                    "<div class='px-detail-shell'>"
+                                    f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
+                                    f"<div class='px-sub'>Stat-sig source: {sdet['Source Used'].iloc[0]}</div>"
+                                    "</div>"
+                                ),
+                                unsafe_allow_html=True,
                             )
-                        fig_px.update_layout(
-                            margin=dict(l=0, r=0, t=48, b=0),
-                            yaxis_tickformat=".0%",
-                            yaxis_title="Percent Change",
-                            xaxis_title="Bid Adjustment Test Point",
-                            legend_title_text="Metric",
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="rgba(0,0,0,0)",
-                        )
-                        st.plotly_chart(fig_px, use_container_width=True, key=f"tab4_px_chart_{state_s}_{channel_s}_{segment_s}")
+                            st.markdown("<div class='px-subhead'>KPI Summary</div>", unsafe_allow_html=True)
+                            render_kpi_tiles(
+                                [
+                                    {"label": "State-Segment ROE", "value": "n/a" if pd.isna(seg_roe) else f"{seg_roe:.1%}"},
+                                    {"label": "State-Segment MRLTV", "value": "n/a" if pd.isna(seg_ltv) else f"${seg_ltv:,.0f}"},
+                                    {"label": "State-Segment CPB", "value": "n/a" if pd.isna(seg_cpb) else f"${seg_cpb:,.0f}"},
+                                    {"label": "State-Segment Binds", "value": "n/a" if pd.isna(seg_binds) else f"{seg_binds:,.0f}"},
+                                    {"label": "Channel Bids", "value": f"{ch_bids:,.0f}"},
+                                    {"label": "Channel Win Rate", "value": "n/a" if pd.isna(ch_wr) else f"{ch_wr:.2%}"},
+                                    {"label": "Channel SOV", "value": "n/a" if pd.isna(ch_sov) else f"{ch_sov:.1%}"},
+                                ],
+                                cols=4,
+                            )
+                            st.markdown("<div class='px-sep'></div>", unsafe_allow_html=True)
+                            st.markdown("<div class='px-subhead'>Testing Impact Chart</div>", unsafe_allow_html=True)
+                            sdet = sdet.sort_values("Bid Adj %")
+                            bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
+                            bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
+                            melted = bar_df.melt(
+                                id_vars=["Adj Label", "Sig Icon", "Sig Level"],
+                                value_vars=["Win-Rate Uplift", "CPC Uplift"],
+                                var_name="Metric",
+                                value_name="Change",
+                            )
+                            fig_px = px.bar(
+                                melted,
+                                x="Adj Label",
+                                y="Change",
+                                color="Metric",
+                                barmode="group",
+                                color_discrete_map={"Win-Rate Uplift": "#22d3ee", "CPC Uplift": "#f59e0b"},
+                                template=plotly_template,
+                                title="Testing Point Impact: Win-Rate vs CPC",
+                            )
+                            fig_px.update_traces(
+                                texttemplate="%{y:.1%}",
+                                textposition="outside",
+                                hovertemplate="%{x}<br>%{fullData.name}: %{y:.2%}<extra></extra>",
+                            )
+                            y_max = max(
+                                float(pd.to_numeric(melted["Change"], errors="coerce").fillna(0).max()),
+                                0.02,
+                            )
+                            for _, rr in bar_df.iterrows():
+                                fig_px.add_annotation(
+                                    x=rr["Adj Label"],
+                                    y=y_max * 1.18,
+                                    text=f"{rr['Sig Icon']} {rr['Sig Level']}",
+                                    showarrow=False,
+                                    font=dict(size=11, color="#cbd5e1"),
+                                )
+                            fig_px.update_layout(
+                                margin=dict(l=0, r=0, t=48, b=0),
+                                yaxis_tickformat=".0%",
+                                yaxis_title="Percent Change",
+                                xaxis_title="Bid Adjustment Test Point",
+                                legend_title_text="Metric",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                plot_bgcolor="rgba(0,0,0,0)",
+                            )
+                            st.plotly_chart(fig_px, use_container_width=True, key=f"tab4_px_chart_{state_s}_{channel_s}_{segment_s}")
+                            st.markdown("<div class='px-sep'></div>", unsafe_allow_html=True)
+                            st.markdown("<div class='px-subhead'>Testing Point Table</div>", unsafe_allow_html=True)
 
-                        tbl = sdet.copy()
-                        tbl["Testing Point"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
-                        tbl["Bid"] = tbl["Test Bids"].map(lambda x: f"{float(x):,.0f}")
-                        tbl["Stat-Sig"] = tbl["Sig Icon"].astype(str) + " " + tbl["Sig Level"].astype(str)
-                        tbl["Win Rate Diff"] = tbl["Win Rate Uplift"].map(lambda x: f"{float(x):+.1%}")
-                        tbl["Additional Clicks"] = tbl["Additional Clicks"].map(lambda x: f"{float(x):,.0f}")
-                        tbl["Additional Bid"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
-                        tbl["CPC Uplift"] = tbl["CPC Uplift"].map(lambda x: f"{float(x):+.1%}")
-                        tbl["Additional Budget"] = tbl["Additional Budget Needed"].map(lambda x: f"${float(x):,.0f}")
-                        show_tbl = tbl[
-                            [
-                                "Testing Point",
-                                "Bid",
-                                "Stat-Sig",
-                                "Win Rate Diff",
-                                "Additional Clicks",
-                                "Additional Bid",
-                                "CPC Uplift",
-                                "Additional Budget",
+                            tbl = sdet.copy()
+                            tbl["Testing Point"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+                            tbl["Bid"] = tbl["Test Bids"].map(lambda x: f"{float(x):,.0f}")
+                            tbl["Stat-Sig"] = tbl["Sig Icon"].astype(str) + " " + tbl["Sig Level"].astype(str)
+                            tbl["Win Rate Diff"] = tbl["Win Rate Uplift"].map(lambda x: f"{float(x):+.1%}")
+                            tbl["Additional Clicks"] = tbl["Additional Clicks"].map(lambda x: f"{float(x):,.0f}")
+                            tbl["Additional Bid"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+                            tbl["CPC Uplift"] = tbl["CPC Uplift"].map(lambda x: f"{float(x):+.1%}")
+                            tbl["Additional Budget"] = tbl["Additional Budget Needed"].map(lambda x: f"${float(x):,.0f}")
+                            show_tbl = tbl[
+                                [
+                                    "Testing Point",
+                                    "Bid",
+                                    "Stat-Sig",
+                                    "Win Rate Diff",
+                                    "Additional Clicks",
+                                    "Additional Bid",
+                                    "CPC Uplift",
+                                    "Additional Budget",
+                                ]
                             ]
-                        ]
-                        st.markdown("**Testing Point Details**")
-                        st.dataframe(show_tbl, use_container_width=True, hide_index=True)
+                            st.dataframe(show_tbl, use_container_width=True, hide_index=True)
 
     elif selected_tab == tab_labels[5]:
         st.subheader("🌌 Neon Insights Cockpit")
