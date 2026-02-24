@@ -1,6 +1,7 @@
 import re
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -1080,6 +1081,21 @@ def to_bool(v) -> bool:
         if s in {"false", "0", "no", "n", "off", ""}:
             return False
     return False
+
+
+def confirm_action_modal(title: str, message: str, confirm_key: str, cancel_key: str) -> None:
+    @st.dialog(title)
+    def _modal():
+        st.write(message)
+        c1, c2 = st.columns(2)
+        if c1.button("Confirm", key=confirm_key):
+            st.session_state["tab1_modal_confirmed"] = True
+            st.rerun()
+        if c2.button("Cancel", key=cancel_key):
+            st.session_state["tab1_modal_pending_action"] = ""
+            st.session_state["tab1_modal_confirmed"] = False
+            st.rerun()
+    _modal()
 
 
 def load_overrides_from_disk() -> dict:
@@ -2442,26 +2458,78 @@ def main() -> None:
                             st.info("Saving changes and recalculating. Please wait...")
 
                         a_save, a_reset = st.columns([1, 1])
-                        do_save = a_save.button("Save Edits", key=f"tab1_save_edits_{selected_state}", disabled=is_saving)
-                        do_reset_recommended = a_reset.button(
+                        do_save_click = a_save.button("Save Edits", key=f"tab1_save_edits_{selected_state}", disabled=is_saving)
+                        do_reset_click = a_reset.button(
                             "Reset To Recommended Bid",
                             key=f"tab1_reset_rec_{selected_state}",
                             disabled=is_saving,
                         )
 
-                        if do_reset_recommended:
-                            edited["Selection Source"] = "Suggested"
-                            edited["Selected Price Adj"] = pd.to_numeric(edited["Rec Bid Adj"], errors="coerce").fillna(0.0)
-                            if "Adj Selection" in edited.columns and "Adj Options" in edited.columns:
-                                for idx in edited.index:
-                                    opts = edited.at[idx, "Adj Options"]
-                                    recv = float(pd.to_numeric(pd.Series([edited.at[idx, "Rec Bid Adj"]]), errors="coerce").fillna(0.0).iloc[0])
-                                    if isinstance(opts, list) and opts:
-                                        picked = next((lb for lb in opts if parse_adj_from_label(lb) == recv), opts[0])
-                                        edited.at[idx, "Adj Selection"] = picked
+                        if do_save_click:
+                            st.session_state["tab1_modal_pending_action"] = "save"
+                            st.session_state["tab1_modal_confirmed"] = False
+                            st.rerun()
+                        if do_reset_click:
+                            st.session_state["tab1_modal_pending_action"] = "reset"
+                            st.session_state["tab1_modal_confirmed"] = False
+                            st.rerun()
+
+                        pending_action = str(st.session_state.get("tab1_modal_pending_action", ""))
+                        if pending_action == "save":
+                            confirm_action_modal(
+                                "Confirm Save",
+                                "Apply and save all changes in this state table?",
+                                f"tab1_confirm_save_{selected_state}",
+                                f"tab1_cancel_save_{selected_state}",
+                            )
+                        elif pending_action == "reset":
+                            confirm_action_modal(
+                                "Confirm Reset",
+                                "Reset all rows in this state table to recommended bids and save?",
+                                f"tab1_confirm_reset_{selected_state}",
+                                f"tab1_cancel_reset_{selected_state}",
+                            )
+
+                        run_action = bool(st.session_state.get("tab1_modal_confirmed", False))
+                        if run_action and pending_action == "reset":
+                            st.session_state[saving_key] = True
+                            with st.status("Processing reset...", expanded=True) as status:
+                                status.write("Saving data...")
+                                edited["Selection Source"] = "Suggested"
+                                edited["Selected Price Adj"] = pd.to_numeric(edited["Rec Bid Adj"], errors="coerce").fillna(0.0)
+                                if "Adj Selection" in edited.columns and "Adj Options" in edited.columns:
+                                    for idx in edited.index:
+                                        opts = edited.at[idx, "Adj Options"]
+                                        recv = float(pd.to_numeric(pd.Series([edited.at[idx, "Rec Bid Adj"]]), errors="coerce").fillna(0.0).iloc[0])
+                                        if isinstance(opts, list) and opts:
+                                            picked = next((lb for lb in opts if parse_adj_from_label(lb) == recv), opts[0])
+                                            edited.at[idx, "Adj Selection"] = picked
+                                prev_overrides = dict(st.session_state.get("bid_overrides", {}))
+                                new_overrides = {
+                                    k: v for k, v in prev_overrides.items() if not str(k).startswith(f"{selected_state}|")
+                                }
+                                ok, err = save_overrides_to_disk(new_overrides)
+                                status.write("Recalculating binds prediction...")
+                                time.sleep(0.15)
+                                status.write("Collecting data...")
+                                time.sleep(0.15)
+                                status.update(label="Reset completed.", state="complete")
+
+                            st.session_state[saving_key] = False
+                            if not ok:
+                                st.error(err)
+                            st.session_state["bid_overrides"] = new_overrides
                             st.session_state[draft_key] = edited
-                            st.info("Draft updated. Click `Save Edits` to apply.")
-                        if do_save:
+                            st.session_state["tab1_save_notice"] = "Reset to recommended bids completed."
+                            st.session_state.pop(f"tab1_grid_draft_{selected_state}", None)
+                            st.session_state[f"tab1_grid_refresh_{selected_state}"] = int(
+                                st.session_state.get(f"tab1_grid_refresh_{selected_state}", 0)
+                            ) + 1
+                            st.session_state["tab1_modal_pending_action"] = ""
+                            st.session_state["tab1_modal_confirmed"] = False
+                            st.rerun()
+
+                        if run_action and pending_action == "save":
                             st.session_state[saving_key] = True
                             prev_overrides = dict(st.session_state.get("bid_overrides", {}))
                             new_overrides = dict(prev_overrides)
@@ -2513,9 +2581,15 @@ def main() -> None:
                                 ):
                                     changed_keys.add(k)
                             changed_rows = len(changed_keys)
-                            with st.spinner("Saving adjustments and recalculating..."):
+                            with st.status("Processing save...", expanded=True) as status:
+                                status.write("Saving data...")
                                 st.session_state["bid_overrides"] = new_overrides
                                 ok, err = save_overrides_to_disk(new_overrides)
+                                status.write("Recalculating binds prediction...")
+                                time.sleep(0.15)
+                                status.write("Collecting data...")
+                                time.sleep(0.15)
+                                status.update(label="Save completed.", state="complete")
                             st.session_state[saving_key] = False
                             if not ok:
                                 st.error(err)
@@ -2526,6 +2600,8 @@ def main() -> None:
                             st.session_state[f"tab1_grid_refresh_{selected_state}"] = int(
                                 st.session_state.get(f"tab1_grid_refresh_{selected_state}", 0)
                             ) + 1
+                            st.session_state["tab1_modal_pending_action"] = ""
+                            st.session_state["tab1_modal_confirmed"] = False
                             st.rerun()
 
                         if st.session_state.get("tab1_save_notice"):
