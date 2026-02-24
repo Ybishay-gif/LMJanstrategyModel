@@ -1,4 +1,5 @@
 import os
+import json
 import hmac
 import base64
 import hashlib
@@ -69,8 +70,8 @@ def save_auth_users(users: dict) -> tuple[bool, str]:
         AUTH_USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
         AUTH_USERS_PATH.write_text(json.dumps(users, indent=2))
         return True, ""
-    except Exception:
-        return False, "Failed to save user credentials."
+    except Exception as exc:
+        return False, f"Failed to save user credentials: {exc}"
 
 
 def hash_password(password: str) -> tuple[str, str, int]:
@@ -514,5 +515,4 @@ def render_top_icons(is_admin: bool, settings_view: bool = False) -> None:
         ),
         unsafe_allow_html=True,
     )
-
 
