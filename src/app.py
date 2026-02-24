@@ -3373,10 +3373,6 @@ def main() -> None:
                 end_idx = min(start_idx + int(page_size), total_cards)
                 p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
                 page_df = filt_master.iloc[start_idx:end_idx].copy()
-
-                detail_lookup = build_price_exploration_detail_lookup(detail_df)
-                state_s, channel_s, segment_s = str(selected_key).split("|", 2)
-                sdet_preview = detail_lookup.get(selected_key, pd.DataFrame()).copy()
                 # Panel height follows left card volume; both sections use the same height.
                 left_target = int(124 * len(page_df) + 100)
                 panel_height = max(980, min(left_target, 1900))
@@ -3411,6 +3407,11 @@ def main() -> None:
                             ):
                                 st.session_state["px_selected_card_key"] = card_key
                                 selected_key = card_key
+
+                # Resolve the selected card after click handling so one click updates details.
+                detail_lookup = build_price_exploration_detail_lookup(detail_df)
+                state_s, channel_s, segment_s = str(selected_key).split("|", 2)
+                sdet_preview = detail_lookup.get(selected_key, pd.DataFrame()).copy()
 
                 with right:
                     with fixed_height_container(panel_height, key="tab4_right_scroll"):
