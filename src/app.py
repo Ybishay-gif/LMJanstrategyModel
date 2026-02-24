@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
@@ -1115,6 +1116,62 @@ def precompute_popup_options_for_state(
     return pd.concat(rows, ignore_index=True)
 
 
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
+def build_price_exploration_master_detail(
+    rec_df: pd.DataFrame,
+    price_eval_df: pd.DataFrame,
+    settings: Settings,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    base = (
+        rec_df.groupby(["State", "Channel Groups", "Segment"], as_index=False)
+        .agg(
+            Bids=("Bids", "sum"),
+            Binds=("Binds", "sum"),
+            Clicks=("Clicks", "sum"),
+        )
+        .sort_values(["State", "Channel Groups"])
+    )
+    if base.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    masters: list[dict] = []
+    details: list[pd.DataFrame] = []
+    for _, row in base.iterrows():
+        state = str(row["State"])
+        channel_group = str(row["Channel Groups"])
+        segment = str(row["Segment"])
+        opts, src = build_popup_card_options(rec_df, price_eval_df, state, channel_group, settings)
+        if opts.empty:
+            continue
+
+        p = opts.copy()
+        p["State"] = state
+        p["Channel Groups"] = channel_group
+        p["Segment"] = segment
+        p["Source Used"] = src
+        p["Adj Label"] = p["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+        p = p.sort_values("Bid Adj %")
+        details.append(p)
+
+        point_labels = " || ".join(p["Adj Label"].tolist())
+        masters.append(
+            {
+                "State": state,
+                "Channel Groups": channel_group,
+                "Segment": segment,
+                "Total Bids": float(row["Bids"]),
+                "Total Clicks": float(row["Clicks"]),
+                "Total Binds": float(row["Binds"]),
+                "Testing Points": point_labels,
+                "Testing Points Count": int(len(p)),
+                "Source Used": src,
+            }
+        )
+    if not masters:
+        return pd.DataFrame(), pd.DataFrame()
+    return pd.DataFrame(masters), pd.concat(details, ignore_index=True)
+
+
 def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, cpb_impact: float, sig_level: str) -> str:
     cpb_txt = "n/a" if pd.isna(cpb_impact) else f"{cpb_impact:+.1%}"
     return (
@@ -1761,6 +1818,7 @@ def main() -> None:
         "🗺️ Tab 1: State Momentum Map",
         "📊 Tab 2: Channel Group Analysis",
         "🧠 Tab 3: Channel Group and States",
+        "🧪 Tab 4: Price Exploration Details",
         "🌌 Neon Insights Cockpit",
     ])
 
@@ -2891,6 +2949,232 @@ def main() -> None:
         )
 
     with tabs[4]:
+        st.subheader("🧪 Price Exploration Details")
+        st.caption("Master-detail view of valid test points by state + channel group.")
+        st.markdown(
+            """
+            <style>
+            .px-card {
+                background:
+                    radial-gradient(120% 140% at 0% 0%, rgba(14,165,233,0.16), rgba(14,165,233,0) 42%),
+                    radial-gradient(120% 120% at 100% 0%, rgba(34,211,238,0.12), rgba(34,211,238,0) 44%),
+                    linear-gradient(145deg, rgba(15,23,42,0.95), rgba(17,24,39,0.90));
+                border: 1px solid rgba(56,189,248,0.22);
+                border-radius: 14px;
+                padding: 12px 12px 10px 12px;
+                margin-bottom: 8px;
+                box-shadow: 0 0 0 1px rgba(15,23,42,0.2), 0 12px 30px rgba(2,6,23,0.42);
+                transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+            }
+            .px-card:hover {
+                transform: translateY(-1px);
+                border-color: rgba(34,211,238,0.45);
+                box-shadow: 0 0 0 1px rgba(15,23,42,0.16), 0 14px 34px rgba(2,6,23,0.5);
+            }
+            .px-card-selected {
+                border-color: rgba(52,211,153,0.9);
+                box-shadow:
+                    0 0 0 1px rgba(16,185,129,0.55),
+                    0 0 22px rgba(16,185,129,0.3),
+                    0 10px 28px rgba(2,6,23,0.5);
+            }
+            .px-title {
+                font-size: 0.95rem;
+                font-weight: 700;
+                color: #e2e8f0;
+                margin-bottom: 4px;
+            }
+            .px-sub {
+                font-size: 0.79rem;
+                color: #bfdbfe;
+            }
+            .px-points {
+                font-size: 0.78rem;
+                color: #a7f3d0;
+                margin-top: 7px;
+                word-break: break-word;
+            }
+            .px-chip-row {
+                margin-top: 8px;
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+            .px-chip {
+                display: inline-block;
+                border: 1px solid rgba(148,163,184,0.35);
+                border-radius: 999px;
+                padding: 2px 8px;
+                font-size: 0.72rem;
+                color: #cbd5e1;
+                background: rgba(15,23,42,0.58);
+            }
+            .px-detail-shell {
+                border: 1px solid rgba(56,189,248,0.22);
+                border-radius: 14px;
+                padding: 12px 14px;
+                background:
+                    radial-gradient(120% 120% at 0% 0%, rgba(14,165,233,0.12), rgba(14,165,233,0) 48%),
+                    linear-gradient(145deg, rgba(15,23,42,0.90), rgba(17,24,39,0.85));
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        master_df, detail_df = build_price_exploration_master_detail(rec_df, price_eval, settings)
+        if master_df.empty or detail_df.empty:
+            st.info("No stat-significant price exploration points found for the current data.")
+        else:
+            fx1, fx2, fx3 = st.columns(3)
+            state_opts = sorted(master_df["State"].dropna().unique().tolist())
+            channel_opts = sorted(master_df["Channel Groups"].dropna().unique().tolist())
+            segment_opts = sorted(master_df["Segment"].dropna().unique().tolist())
+            sel_state_px = fx1.multiselect("State", options=state_opts, default=state_opts, key="tab4_px_state")
+            sel_channel_px = fx2.multiselect("Channel Group", options=channel_opts, default=channel_opts, key="tab4_px_channel")
+            sel_segment_px = fx3.multiselect("Segment", options=segment_opts, default=segment_opts, key="tab4_px_segment")
+
+            filt_master = master_df[
+                master_df["State"].isin(sel_state_px)
+                & master_df["Channel Groups"].isin(sel_channel_px)
+                & master_df["Segment"].isin(sel_segment_px)
+            ].copy()
+            if filt_master.empty:
+                st.warning("No cards match the selected filters.")
+            else:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Cards", f"{len(filt_master):,.0f}")
+                m2.metric("Total Binds", f"{filt_master['Total Binds'].sum():,.0f}")
+                m3.metric("Total Clicks", f"{filt_master['Total Clicks'].sum():,.0f}")
+
+                filt_master = filt_master.sort_values(["Total Binds", "Total Bids"], ascending=False)
+                valid_keys = set(
+                    filt_master.apply(lambda r: f"{r['State']}|{r['Channel Groups']}|{r['Segment']}", axis=1).tolist()
+                )
+                selected_key = st.session_state.get("px_selected_card_key")
+                if selected_key not in valid_keys:
+                    first_row = filt_master.iloc[0]
+                    selected_key = f"{first_row['State']}|{first_row['Channel Groups']}|{first_row['Segment']}"
+                    st.session_state["px_selected_card_key"] = selected_key
+
+                left, right = st.columns([1.1, 1.9], gap="large")
+                with left:
+                    st.markdown("**Master Cards**")
+                    for _, r in filt_master.iterrows():
+                        card_key = f"{r['State']}|{r['Channel Groups']}|{r['Segment']}"
+                        active = card_key == st.session_state.get("px_selected_card_key")
+                        card_cls = "px-card px-card-selected" if active else "px-card"
+                        active_label = "<span class='px-chip' style='border-color:rgba(16,185,129,0.65);color:#6ee7b7;'>Selected</span>" if active else ""
+                        st.markdown(
+                            (
+                                f"<div class='{card_cls}'>"
+                                f"<div class='px-title'>{r['State']} · {r['Channel Groups']}</div>"
+                                f"<div class='px-sub'>Segment: {r['Segment']} | Binds: {r['Total Binds']:,.0f} | Bids: {r['Total Bids']:,.0f}</div>"
+                                f"<div class='px-points'>Test points: {r['Testing Points']}</div>"
+                                "<div class='px-chip-row'>"
+                                f"<span class='px-chip'>{int(r['Testing Points Count'])} points</span>"
+                                f"<span class='px-chip'>{r['Source Used']}</span>"
+                                f"{active_label}"
+                                "</div>"
+                                "</div>"
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("Open", key=f"px_open_{card_key}", use_container_width=True):
+                            st.session_state["px_selected_card_key"] = card_key
+                            st.rerun()
+
+                with right:
+                    state_s, channel_s, segment_s = str(selected_key).split("|", 2)
+                    sdet = detail_df[
+                        (detail_df["State"] == state_s)
+                        & (detail_df["Channel Groups"] == channel_s)
+                        & (detail_df["Segment"] == segment_s)
+                    ].copy()
+                    if sdet.empty:
+                        st.info("No detail points found for the selected card.")
+                    else:
+                        st.markdown(
+                            (
+                                "<div class='px-detail-shell'>"
+                                f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
+                                f"<div class='px-sub'>Stat-sig source: {sdet['Source Used'].iloc[0]}</div>"
+                                "</div>"
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                        sdet = sdet.sort_values("Bid Adj %")
+                        bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
+                        bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
+                        melted = bar_df.melt(
+                            id_vars=["Adj Label", "Sig Icon", "Sig Level"],
+                            value_vars=["Win-Rate Uplift", "CPC Uplift"],
+                            var_name="Metric",
+                            value_name="Change",
+                        )
+                        fig_px = px.bar(
+                            melted,
+                            x="Adj Label",
+                            y="Change",
+                            color="Metric",
+                            barmode="group",
+                            color_discrete_map={"Win-Rate Uplift": "#22d3ee", "CPC Uplift": "#f59e0b"},
+                            template=plotly_template,
+                            title="Testing Point Impact: Win-Rate vs CPC",
+                        )
+                        fig_px.update_traces(
+                            texttemplate="%{y:.1%}",
+                            textposition="outside",
+                            hovertemplate="%{x}<br>%{fullData.name}: %{y:.2%}<extra></extra>",
+                        )
+                        y_max = max(
+                            float(pd.to_numeric(melted["Change"], errors="coerce").fillna(0).max()),
+                            0.02,
+                        )
+                        for _, rr in bar_df.iterrows():
+                            fig_px.add_annotation(
+                                x=rr["Adj Label"],
+                                y=y_max * 1.18,
+                                text=f"{rr['Sig Icon']} {rr['Sig Level']}",
+                                showarrow=False,
+                                font=dict(size=11, color="#cbd5e1"),
+                            )
+                        fig_px.update_layout(
+                            margin=dict(l=0, r=0, t=48, b=0),
+                            yaxis_tickformat=".0%",
+                            yaxis_title="Percent Change",
+                            xaxis_title="Bid Adjustment Test Point",
+                            legend_title_text="Metric",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(fig_px, use_container_width=True, key=f"tab4_px_chart_{state_s}_{channel_s}_{segment_s}")
+
+                        tbl = sdet.copy()
+                        tbl["Testing Point"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+                        tbl["Bid"] = tbl["Test Bids"].map(lambda x: f"{float(x):,.0f}")
+                        tbl["Stat-Sig"] = tbl["Sig Icon"].astype(str) + " " + tbl["Sig Level"].astype(str)
+                        tbl["Win Rate Diff"] = tbl["Win Rate Uplift"].map(lambda x: f"{float(x):+.1%}")
+                        tbl["Additional Clicks"] = tbl["Additional Clicks"].map(lambda x: f"{float(x):,.0f}")
+                        tbl["Additional Bid"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+                        tbl["CPC Uplift"] = tbl["CPC Uplift"].map(lambda x: f"{float(x):+.1%}")
+                        tbl["Additional Budget"] = tbl["Additional Budget Needed"].map(lambda x: f"${float(x):,.0f}")
+                        show_tbl = tbl[
+                            [
+                                "Testing Point",
+                                "Bid",
+                                "Stat-Sig",
+                                "Win Rate Diff",
+                                "Additional Clicks",
+                                "Additional Bid",
+                                "CPC Uplift",
+                                "Additional Budget",
+                            ]
+                        ]
+                        st.markdown("**Testing Point Details**")
+                        st.dataframe(show_tbl, use_container_width=True, hide_index=True)
+
+    with tabs[5]:
         st.subheader("🌌 Neon Insights Cockpit")
         st.caption("Futuristic overview of growth, intent, performance, and strategy using current model outputs.")
         if fast_mode:
