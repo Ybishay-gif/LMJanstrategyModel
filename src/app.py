@@ -3233,6 +3233,20 @@ def main() -> None:
                 margin-bottom: 6px !important;
                 white-space: pre-line !important;
             }
+            [class*="st-key-px_card_"] button p {
+                margin: 0 !important;
+                line-height: 1.42 !important;
+                letter-spacing: 0.1px;
+            }
+            [class*="st-key-px_card_"] button strong {
+                color: #f8fafc !important;
+                font-weight: 800 !important;
+            }
+            [class*="st-key-px_card_"] button em {
+                color: #67e8f9 !important;
+                font-style: normal !important;
+                font-weight: 700 !important;
+            }
             [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar {
                 width: 10px;
             }
@@ -3321,7 +3335,7 @@ def main() -> None:
 
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
-                    st.markdown("**Master Cards**")
+                    st.markdown("**Price Exploration Testing**")
                     with fixed_height_container(780, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
@@ -3329,10 +3343,10 @@ def main() -> None:
                             active = card_key == st.session_state.get("px_selected_card_key")
                             points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
                             point_boxes = " ".join([f"[{p}]" for p in points[:7]])
-                            header_line = f"**{ch_name} · {r['State']}**"
+                            header_line = f"**{ch_name} · _{r['State']}_**"
                             stats_line = (
-                                f"Bids: **{r['Total Bids']:,.0f}**   ||   "
-                                f"Clicks: **{r['Total Clicks']:,.0f}**   ||   "
+                                f"Bids: **{r['Total Bids']:,.0f}**   │   "
+                                f"Clicks: **{r['Total Clicks']:,.0f}**   │   "
                                 f"Binds: **{r['Total Binds']:,.0f}**"
                             )
                             segment_line = f"Segment: {r['Segment']}   |   Source: {r['Source Used']}"
