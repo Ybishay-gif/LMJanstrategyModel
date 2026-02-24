@@ -3226,12 +3226,12 @@ def main() -> None:
                 background: linear-gradient(145deg, rgba(19,27,44,0.96), rgba(21,30,48,0.90)) !important;
                 border: 1px solid rgba(45,212,191,0.78) !important;
                 border-radius: 14px !important;
-                padding: 12px !important;
-                min-height: 148px !important;
+                padding: 9px 10px !important;
+                min-height: 108px !important;
                 height: auto !important;
                 text-align: left !important;
                 color: #e2e8f0 !important;
-                font-size: 0.88rem !important;
+                font-size: 0.83rem !important;
                 line-height: 1.35 !important;
                 box-shadow: 0 0 0 1px rgba(45,212,191,0.22), 0 0 18px rgba(45,212,191,0.28), 0 10px 26px rgba(2,6,23,0.35) !important;
                 margin-bottom: 6px !important;
@@ -3365,7 +3365,7 @@ def main() -> None:
                     st.session_state["px_selected_card_key"] = selected_key
 
                 p1, p2, p3 = st.columns([1, 1, 2])
-                page_size = p1.selectbox("Cards per page", options=[4, 6, 8, 10, 12], index=1, key="tab4_px_page_size")
+                page_size = p1.selectbox("Cards per page", options=[10, 25, 40, 60], index=1, key="tab4_px_page_size")
                 total_cards = int(len(filt_master))
                 page_count = max((total_cards + int(page_size) - 1) // int(page_size), 1)
                 page_num = int(p2.number_input("Page", min_value=1, max_value=page_count, value=1, step=1, key="tab4_px_page_num"))
@@ -3377,25 +3377,13 @@ def main() -> None:
                 detail_lookup = build_price_exploration_detail_lookup(detail_df)
                 state_s, channel_s, segment_s = str(selected_key).split("|", 2)
                 sdet_preview = detail_lookup.get(selected_key, pd.DataFrame()).copy()
-                table_rows = int(len(sdet_preview)) if sdet_preview is not None else 0
-                right_height = int(820 + (table_rows * 38) + 100)
-                left_height = int(160 * len(page_df) + 120)
-                panel_height = max(right_height, left_height)
-                panel_height = max(980, min(panel_height, 2200))
-                st.markdown(
-                    f"""
-                    <style>
-                    [class*="st-key-tab4_cards_panel"] {{
-                        min-height: {panel_height}px;
-                    }}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                # Panel height follows left card volume; both sections use the same height.
+                left_target = int(124 * len(page_df) + 100)
+                panel_height = max(980, min(left_target, 1900))
                 st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
-                    with st.container(border=True, key="tab4_cards_panel"):
+                    with fixed_height_container(panel_height, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
                             card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
