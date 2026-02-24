@@ -1,5 +1,9 @@
 import re
 import json
+import os
+import hmac
+import base64
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -25,6 +29,8 @@ DEFAULT_PATHS = {
     "channel_state": "data/channel_group_state.csv",
 }
 OVERRIDES_PATH = Path("data/manual_overrides.json")
+AUTH_USERS_PATH = Path("data/auth_users.json")
+AUTH_ALLOWLIST_PATH = Path("data/allowed_emails.txt")
 
 STRATEGY_SCALE = {
     "Strongest Momentum": 1.00,
@@ -1377,6 +1383,180 @@ def parse_adj_from_label(label: str) -> Optional[float]:
         return None
 
 
+def normalize_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def load_allowed_emails() -> set[str]:
+    out: set[str] = set()
+    raw_env = os.getenv("APP_ALLOWED_EMAILS", "")
+    if raw_env:
+        out.update({normalize_email(x) for x in raw_env.split(",") if normalize_email(x)})
+    try:
+        if AUTH_ALLOWLIST_PATH.exists():
+            for ln in AUTH_ALLOWLIST_PATH.read_text(errors="ignore").splitlines():
+                ln = ln.strip()
+                if not ln or ln.startswith("#"):
+                    continue
+                em = normalize_email(ln)
+                if em:
+                    out.add(em)
+    except Exception:
+        pass
+    return out
+
+
+def load_auth_users() -> dict:
+    try:
+        if not AUTH_USERS_PATH.exists():
+            return {}
+        data = json.loads(AUTH_USERS_PATH.read_text())
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return {}
+    return {}
+
+
+def save_auth_users(users: dict) -> tuple[bool, str]:
+    try:
+        AUTH_USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_USERS_PATH.write_text(json.dumps(users, indent=2))
+        return True, ""
+    except Exception:
+        return False, "Failed to save user credentials."
+
+
+def hash_password(password: str) -> tuple[str, str, int]:
+    iterations = 240_000
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return (
+        base64.b64encode(salt).decode("utf-8"),
+        base64.b64encode(digest).decode("utf-8"),
+        iterations,
+    )
+
+
+def verify_password(password: str, salt_b64: str, hash_b64: str, iterations: int) -> bool:
+    try:
+        salt = base64.b64decode(salt_b64.encode("utf-8"))
+        expected = base64.b64decode(hash_b64.encode("utf-8"))
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterations))
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def render_auth_gate() -> bool:
+    if st.session_state.get("auth_ok", False):
+        return True
+
+    allowed = load_allowed_emails()
+    users = load_auth_users()
+
+    st.title("🔐 Secure Login")
+    if not allowed:
+        st.error("No allowlist configured. Add emails to `data/allowed_emails.txt`.")
+        return False
+
+    stage = st.session_state.get("auth_stage", "email")
+    staged_email = normalize_email(st.session_state.get("auth_email", ""))
+
+    if stage == "email":
+        with st.form("auth_email_form", clear_on_submit=False):
+            email = st.text_input("Work email", value=staged_email, placeholder="name@company.com")
+            submitted = st.form_submit_button("Next")
+        if submitted:
+            e = normalize_email(email)
+            if "@" not in e:
+                st.error("Enter a valid email.")
+                return False
+            if e not in allowed:
+                st.error("Email is not authorized.")
+                return False
+            st.session_state["auth_email"] = e
+            if isinstance(users.get(e), dict) and users[e].get("password_hash"):
+                st.session_state["auth_stage"] = "password"
+            else:
+                st.session_state["auth_stage"] = "create"
+            st.rerun()
+        return False
+
+    if stage == "create":
+        st.info(f"First-time setup for: `{staged_email}`")
+        with st.form("auth_create_form", clear_on_submit=False):
+            p1 = st.text_input("Create password", type="password")
+            p2 = st.text_input("Confirm password", type="password")
+            c1, c2 = st.columns(2)
+            create = c1.form_submit_button("Create Password")
+            back = c2.form_submit_button("Back")
+        if back:
+            st.session_state["auth_stage"] = "email"
+            st.rerun()
+        if create:
+            if len(p1) < 8:
+                st.error("Password must be at least 8 characters.")
+                return False
+            if p1 != p2:
+                st.error("Passwords do not match.")
+                return False
+            salt_b64, hash_b64, iters = hash_password(p1)
+            users[staged_email] = {
+                "email": staged_email,
+                "salt": salt_b64,
+                "password_hash": hash_b64,
+                "iterations": int(iters),
+                "active": True,
+            }
+            ok, err = save_auth_users(users)
+            if not ok:
+                st.error(err)
+                return False
+            st.session_state["auth_ok"] = True
+            st.session_state["auth_user"] = staged_email
+            st.session_state["auth_stage"] = "password"
+            st.rerun()
+        return False
+
+    if stage == "password":
+        st.caption(f"Email: `{staged_email}`")
+        with st.form("auth_password_form", clear_on_submit=False):
+            pw = st.text_input("Password", type="password")
+            c1, c2 = st.columns(2)
+            login = c1.form_submit_button("Login")
+            switch = c2.form_submit_button("Use Another Email")
+        if switch:
+            st.session_state["auth_stage"] = "email"
+            st.session_state["auth_email"] = ""
+            st.rerun()
+        if login:
+            rec = users.get(staged_email, {})
+            if not isinstance(rec, dict) or not rec.get("password_hash"):
+                st.error("User is not provisioned. Run first-time setup.")
+                st.session_state["auth_stage"] = "email"
+                return False
+            if not bool(rec.get("active", True)):
+                st.error("User access is disabled.")
+                return False
+            ok = verify_password(
+                pw,
+                str(rec.get("salt", "")),
+                str(rec.get("password_hash", "")),
+                int(rec.get("iterations", 240000)),
+            )
+            if not ok:
+                st.error("Invalid email or password.")
+                return False
+            st.session_state["auth_ok"] = True
+            st.session_state["auth_user"] = staged_email
+            st.rerun()
+        return False
+
+    st.session_state["auth_stage"] = "email"
+    return False
+
+
 def nearest_available_adj(channel_group: str, target_adj: float, popup_state_df: pd.DataFrame) -> tuple[float, str]:
     if popup_state_df is None or popup_state_df.empty:
         return float(target_adj), "No test-point list found; used requested value."
@@ -1753,7 +1933,18 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
 
 
 def main() -> None:
+    if not render_auth_gate():
+        return
+
     with st.sidebar:
+        st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
+        if st.button("Logout", key="auth_logout_btn"):
+            st.session_state["auth_ok"] = False
+            st.session_state["auth_user"] = ""
+            st.session_state["auth_stage"] = "email"
+            st.session_state["auth_email"] = ""
+            st.rerun()
+        st.divider()
         dark_mode = st.toggle("Dark mode", value=True)
         fast_mode = st.toggle("Fast interaction mode", value=True, help="Reduces heavy chart rendering for faster clicks/saves.")
     st.markdown(DARK_CSS if dark_mode else LIGHT_CSS, unsafe_allow_html=True)
