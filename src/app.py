@@ -3138,6 +3138,31 @@ def main() -> None:
                     radial-gradient(120% 120% at 0% 0%, rgba(14,165,233,0.12), rgba(14,165,233,0) 48%),
                     linear-gradient(145deg, rgba(15,23,42,0.90), rgba(17,24,39,0.85));
             }
+            [class*="st-key-px_card_"] button {
+                background:
+                    radial-gradient(120% 140% at 0% 0%, rgba(14,165,233,0.16), rgba(14,165,233,0) 42%),
+                    radial-gradient(120% 120% at 100% 0%, rgba(34,211,238,0.12), rgba(34,211,238,0) 44%),
+                    linear-gradient(145deg, rgba(15,23,42,0.95), rgba(17,24,39,0.90)) !important;
+                border: 1px solid rgba(56,189,248,0.26) !important;
+                border-radius: 14px !important;
+                padding: 9px 11px !important;
+                min-height: 126px !important;
+                height: auto !important;
+                text-align: left !important;
+                color: #e2e8f0 !important;
+                font-size: 0.84rem !important;
+                line-height: 1.35 !important;
+                box-shadow: 0 10px 26px rgba(2,6,23,0.35) !important;
+                margin-bottom: 6px !important;
+            }
+            [class*="st-key-px_card_"] button:hover {
+                border-color: rgba(34,211,238,0.48) !important;
+                transform: translateY(-1px);
+            }
+            [class*="st-key-px_card_"] button[kind="primary"] {
+                border-color: rgba(16,185,129,0.95) !important;
+                box-shadow: 0 0 0 1px rgba(16,185,129,0.52), 0 0 18px rgba(16,185,129,0.27), 0 10px 28px rgba(2,6,23,0.5) !important;
+            }
             </style>
             """,
             unsafe_allow_html=True,
@@ -3210,11 +3235,16 @@ def main() -> None:
                     for _, r in page_df.iterrows():
                         card_key = f"{r['State']}|{r['Channel Groups']}|{r['Segment']}"
                         active = card_key == st.session_state.get("px_selected_card_key")
+                        points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
+                        point_boxes = " ".join([f"▣{p}" for p in points[:8]])
+                        header_line = f"{r['State']} · {r['Channel Groups']}"
+                        kpi_line = f"Bids {r['Total Bids']:,.0f}  |  Clicks {r['Total Clicks']:,.0f}  |  Binds {r['Total Binds']:,.0f}"
+                        seg_line = f"Segment {r['Segment']}  |  {int(r['Testing Points Count'])} points  |  {r['Source Used']}"
                         card_label = (
-                            f"{r['State']} · {r['Channel Groups']}\n"
-                            f"Segment: {r['Segment']} | Binds: {r['Total Binds']:,.0f} | Bids: {r['Total Bids']:,.0f}\n"
-                            f"Test points: {r['Testing Points']}\n"
-                            f"{int(r['Testing Points Count'])} points | {r['Source Used']}"
+                            f"{header_line}\n"
+                            f"{kpi_line}\n"
+                            f"{seg_line}\n"
+                            f"{point_boxes}"
                         )
                         if st.button(
                             card_label,
@@ -3232,6 +3262,30 @@ def main() -> None:
                     if sdet.empty:
                         st.info("No detail points found for the selected card.")
                     else:
+                        seg_row = state_seg_df[
+                            (state_seg_df["State"] == state_s) & (state_seg_df["Segment"] == segment_s)
+                        ].head(1)
+                        if seg_row.empty:
+                            seg_roe = float(pd.to_numeric(sdet.get("ROE Proxy", np.nan), errors="coerce").mean())
+                            seg_ltv = float(pd.to_numeric(sdet.get("MRLTV Proxy", np.nan), errors="coerce").mean())
+                            seg_cpb = np.nan
+                            seg_binds = float(pd.to_numeric(sdet.get("Binds", 0), errors="coerce").max())
+                        else:
+                            seg_roe = float(pd.to_numeric(seg_row["ROE"], errors="coerce").iloc[0]) if "ROE" in seg_row.columns else np.nan
+                            seg_ltv = float(pd.to_numeric(seg_row["Avg. MRLTV"], errors="coerce").iloc[0]) if "Avg. MRLTV" in seg_row.columns else np.nan
+                            seg_cpb = float(pd.to_numeric(seg_row["CPB"], errors="coerce").iloc[0]) if "CPB" in seg_row.columns else np.nan
+                            seg_binds = float(pd.to_numeric(seg_row["Binds"], errors="coerce").iloc[0]) if "Binds" in seg_row.columns else np.nan
+
+                        ch_rows = rec_df[
+                            (rec_df["State"] == state_s)
+                            & (rec_df["Segment"] == segment_s)
+                            & (rec_df["Channel Groups"] == channel_s)
+                        ].copy()
+                        ch_bids = float(pd.to_numeric(ch_rows.get("Bids", 0), errors="coerce").fillna(0).sum())
+                        ch_clicks = float(pd.to_numeric(ch_rows.get("Clicks", 0), errors="coerce").fillna(0).sum())
+                        ch_wr = (ch_clicks / ch_bids) if ch_bids > 0 else np.nan
+                        ch_sov = float(pd.to_numeric(ch_rows.get("SOV", np.nan), errors="coerce").mean()) if not ch_rows.empty else np.nan
+
                         st.markdown(
                             (
                                 "<div class='px-detail-shell'>"
@@ -3241,6 +3295,15 @@ def main() -> None:
                             ),
                             unsafe_allow_html=True,
                         )
+                        k1, k2, k3, k4 = st.columns(4)
+                        k1.metric("State-Segment ROE", "n/a" if pd.isna(seg_roe) else f"{seg_roe:.1%}")
+                        k2.metric("State-Segment MRLTV", "n/a" if pd.isna(seg_ltv) else f"${seg_ltv:,.0f}")
+                        k3.metric("State-Segment CPB", "n/a" if pd.isna(seg_cpb) else f"${seg_cpb:,.0f}")
+                        k4.metric("State-Segment Binds", "n/a" if pd.isna(seg_binds) else f"{seg_binds:,.0f}")
+                        k5, k6, k7 = st.columns(3)
+                        k5.metric("Channel Bids", f"{ch_bids:,.0f}")
+                        k6.metric("Channel Win Rate", "n/a" if pd.isna(ch_wr) else f"{ch_wr:.2%}")
+                        k7.metric("Channel SOV", "n/a" if pd.isna(ch_sov) else f"{ch_sov:.1%}")
                         sdet = sdet.sort_values("Bid Adj %")
                         bar_df = sdet[["Adj Label", "Bid Adj %", "Win Rate Uplift", "CPC Uplift", "Sig Icon", "Sig Level"]].copy()
                         bar_df = bar_df.rename(columns={"Win Rate Uplift": "Win-Rate Uplift", "CPC Uplift": "CPC Uplift"})
