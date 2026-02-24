@@ -3379,6 +3379,7 @@ def main() -> None:
                 st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
+                    summary_ph = st.empty()
                     with fixed_height_container(panel_height, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
@@ -3412,6 +3413,37 @@ def main() -> None:
                 detail_lookup = build_price_exploration_detail_lookup(detail_df)
                 state_s, channel_s, segment_s = str(selected_key).split("|", 2)
                 sdet_preview = detail_lookup.get(selected_key, pd.DataFrame()).copy()
+                sel_rows = rec_df[
+                    (rec_df["State"] == state_s)
+                    & (rec_df["Channel Groups"] == channel_s)
+                    & (rec_df["Segment"] == segment_s)
+                ].copy()
+                strategy_txt = "n/a"
+                if not sel_rows.empty and "Strategy Bucket" in sel_rows.columns:
+                    sb = sel_rows["Strategy Bucket"].dropna()
+                    strategy_txt = str(sb.iloc[0]) if not sb.empty else "n/a"
+                source_txt = "Platform"
+                adj_val = np.nan
+                okey = f"{state_s}|{channel_s}"
+                ov = st.session_state.get("bid_overrides", {}).get(okey, {})
+                if isinstance(ov, dict) and bool(ov.get("apply", False)):
+                    adj_val = as_float(ov.get("requested_adj", ov.get("adj", np.nan)), np.nan)
+                    source_txt = "Manual"
+                if pd.isna(adj_val):
+                    if not sel_rows.empty and "Suggested Price Adjustment %" in sel_rows.columns:
+                        adj_val = float(pd.to_numeric(sel_rows["Suggested Price Adjustment %"], errors="coerce").median())
+                    elif not sel_rows.empty and "Applied Price Adjustment %" in sel_rows.columns:
+                        adj_val = float(pd.to_numeric(sel_rows["Applied Price Adjustment %"], errors="coerce").median())
+                adj_txt = "n/a" if pd.isna(adj_val) else f"{adj_val:+.0f}% ({source_txt})"
+                summary_ph.markdown(
+                    (
+                        "<div class='px-detail-shell'>"
+                        f"<div class='px-title'>{state_s} · {channel_s} · {segment_s}</div>"
+                        f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
+                        "</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
 
                 with right:
                     with fixed_height_container(panel_height, key="tab4_right_scroll"):
