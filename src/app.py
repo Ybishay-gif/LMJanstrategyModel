@@ -1928,16 +1928,22 @@ def main() -> None:
     rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
     state_extra_df, state_seg_extra_df, channel_summary_df = summarize_from_rec(rec_df)
 
-    tabs = st.tabs([
+    tab_labels = [
         "🏁 Tab 0: Executive State View",
         "🗺️ Tab 1: State Momentum Map",
         "📊 Tab 2: Channel Group Analysis",
         "🧠 Tab 3: Channel Group and States",
         "🧪 Tab 4: Price Exploration Details",
         "🌌 Neon Insights Cockpit",
-    ])
+    ]
+    selected_tab = st.radio(
+        "View",
+        options=tab_labels,
+        horizontal=True,
+        key="main_view_tab",
+    )
 
-    with tabs[0]:
+    if selected_tab == tab_labels[0]:
         map_df0 = state_df.merge(state_extra_df, on="State", how="left")
         map_df0["Expected_Additional_Clicks"] = map_df0["Expected_Additional_Clicks"].fillna(0)
         map_df0["Expected_Additional_Binds"] = map_df0["Expected_Additional_Binds"].fillna(0)
@@ -2123,7 +2129,7 @@ def main() -> None:
         )
         render_formatted_table(state_perf_layer, use_container_width=True)
 
-    with tabs[1]:
+    elif selected_tab == tab_labels[1]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
         map_df["Expected_Additional_Clicks"] = map_df["Expected_Additional_Clicks"].fillna(0)
         map_df["Expected_Additional_Binds"] = map_df["Expected_Additional_Binds"].fillna(0)
@@ -2892,7 +2898,7 @@ def main() -> None:
                             render_formatted_table(audit_df, use_container_width=True)
                         st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
 
-    with tabs[2]:
+    elif selected_tab == tab_labels[2]:
         st.subheader("📊 Channel Group Analysis")
         current_binds = rec_df["Binds"].fillna(0).sum()
         add_binds = rec_df["Expected Additional Binds"].fillna(0).sum()
@@ -3007,7 +3013,7 @@ def main() -> None:
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
         render_formatted_table(grp, use_container_width=True)
 
-    with tabs[3]:
+    elif selected_tab == tab_labels[3]:
         st.subheader("🧠 Channel Group + State Recommendations")
 
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -3063,7 +3069,7 @@ def main() -> None:
             mime="text/csv",
         )
 
-    with tabs[4]:
+    elif selected_tab == tab_labels[4]:
         st.subheader("🧪 Price Exploration Details")
         st.caption("Master-detail view of valid test points by state + channel group.")
         st.markdown(
@@ -3312,7 +3318,7 @@ def main() -> None:
                         st.markdown("**Testing Point Details**")
                         st.dataframe(show_tbl, use_container_width=True, hide_index=True)
 
-    with tabs[5]:
+    elif selected_tab == tab_labels[5]:
         st.subheader("🌌 Neon Insights Cockpit")
         st.caption("Futuristic overview of growth, intent, performance, and strategy using current model outputs.")
         if fast_mode:
