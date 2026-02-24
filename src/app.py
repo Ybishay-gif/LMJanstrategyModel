@@ -1275,6 +1275,18 @@ def build_price_exploration_master_detail(
     return master, detail
 
 
+@st.cache_data(show_spinner=False)
+def build_price_exploration_detail_lookup(detail_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if detail_df is None or detail_df.empty:
+        return {}
+    out: dict[str, pd.DataFrame] = {}
+    gcols = ["State", "Channel Groups", "Segment"]
+    for (state, channel_group, segment), g in detail_df.groupby(gcols, dropna=False):
+        k = f"{state}|{channel_group}|{segment}"
+        out[k] = g.sort_values("Bid Adj %").reset_index(drop=True)
+    return out
+
+
 def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, cpb_impact: float, sig_level: str) -> str:
     cpb_txt = "n/a" if pd.isna(cpb_impact) else f"{cpb_impact:+.1%}"
     return (
@@ -3151,6 +3163,22 @@ def main() -> None:
                 m3.metric("Total Clicks", f"{filt_master['Total Clicks'].sum():,.0f}")
 
                 filt_master = filt_master.sort_values(["Total Binds", "Total Bids"], ascending=False)
+                quick_find = st.text_input(
+                    "Search cards (state or channel group)",
+                    value="",
+                    key="tab4_px_search",
+                    placeholder="Type state code or channel group...",
+                ).strip()
+                if quick_find:
+                    q = quick_find.lower()
+                    filt_master = filt_master[
+                        filt_master["State"].astype(str).str.lower().str.contains(q, regex=False)
+                        | filt_master["Channel Groups"].astype(str).str.lower().str.contains(q, regex=False)
+                    ].copy()
+                    if filt_master.empty:
+                        st.warning("No cards after search filter.")
+                        st.stop()
+
                 valid_keys = set(
                     filt_master.apply(lambda r: f"{r['State']}|{r['Channel Groups']}|{r['Segment']}", axis=1).tolist()
                 )
@@ -3160,10 +3188,20 @@ def main() -> None:
                     selected_key = f"{first_row['State']}|{first_row['Channel Groups']}|{first_row['Segment']}"
                     st.session_state["px_selected_card_key"] = selected_key
 
+                p1, p2, p3 = st.columns([1, 1, 2])
+                page_size = p1.selectbox("Cards per page", options=[12, 24, 36, 60], index=1, key="tab4_px_page_size")
+                total_cards = int(len(filt_master))
+                page_count = max((total_cards + int(page_size) - 1) // int(page_size), 1)
+                page_num = int(p2.number_input("Page", min_value=1, max_value=page_count, value=1, step=1, key="tab4_px_page_num"))
+                start_idx = (page_num - 1) * int(page_size)
+                end_idx = min(start_idx + int(page_size), total_cards)
+                p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
+                page_df = filt_master.iloc[start_idx:end_idx].copy()
+
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
                     st.markdown("**Master Cards**")
-                    for _, r in filt_master.iterrows():
+                    for _, r in page_df.iterrows():
                         card_key = f"{r['State']}|{r['Channel Groups']}|{r['Segment']}"
                         active = card_key == st.session_state.get("px_selected_card_key")
                         card_cls = "px-card px-card-selected" if active else "px-card"
@@ -3185,15 +3223,12 @@ def main() -> None:
                         )
                         if st.button("Open", key=f"px_open_{card_key}", use_container_width=True):
                             st.session_state["px_selected_card_key"] = card_key
-                            st.rerun()
+                            selected_key = card_key
 
                 with right:
+                    detail_lookup = build_price_exploration_detail_lookup(detail_df)
                     state_s, channel_s, segment_s = str(selected_key).split("|", 2)
-                    sdet = detail_df[
-                        (detail_df["State"] == state_s)
-                        & (detail_df["Channel Groups"] == channel_s)
-                        & (detail_df["Segment"] == segment_s)
-                    ].copy()
+                    sdet = detail_lookup.get(selected_key, pd.DataFrame()).copy()
                     if sdet.empty:
                         st.info("No detail points found for the selected card.")
                     else:
