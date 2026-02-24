@@ -2430,8 +2430,13 @@ def main() -> None:
                         if not selected_rows.empty:
                             selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
 
+                        saving_key = f"tab1_is_saving_{selected_state}"
+                        is_saving = bool(st.session_state.get(saving_key, False))
+                        if is_saving:
+                            st.info("Saving changes and recalculating. Please wait...")
+
                         a0, a1, a2, a3, a4, a5 = st.columns([1, 1.2, 1, 1, 1, 1.2])
-                        do_select_all = a0.button("Select All Rows", key=f"tab1_select_all_{selected_state}")
+                        do_select_all = a0.button("Select All Rows", key=f"tab1_select_all_{selected_state}", disabled=is_saving)
                         bulk_adj = a1.number_input(
                             "Set selected to bid adj %",
                             min_value=-10.0,
@@ -2439,11 +2444,12 @@ def main() -> None:
                             value=10.0,
                             step=5.0,
                             key=f"tab1_bulk_adj_{selected_state}",
+                            disabled=is_saving,
                         )
-                        do_apply_bulk = a2.button("Apply Selected", key=f"tab1_apply_selected_{selected_state}")
-                        do_revert_bulk = a3.button("Revert Selected", key=f"tab1_revert_selected_{selected_state}")
-                        do_save = a4.button("Save Edits", key=f"tab1_save_edits_{selected_state}")
-                        do_revert_all = a5.button("Revert All To Rec", key=f"tab1_revert_all_{selected_state}")
+                        do_apply_bulk = a2.button("Apply Selected", key=f"tab1_apply_selected_{selected_state}", disabled=is_saving)
+                        do_revert_bulk = a3.button("Revert Selected", key=f"tab1_revert_selected_{selected_state}", disabled=is_saving)
+                        do_save = a4.button("Save Edits", key=f"tab1_save_edits_{selected_state}", disabled=is_saving)
+                        do_revert_all = a5.button("Revert All To Rec", key=f"tab1_revert_all_{selected_state}", disabled=is_saving)
 
                         if do_select_all:
                             edited["Select"] = True
@@ -2489,6 +2495,7 @@ def main() -> None:
                             st.session_state[draft_key] = edited
                             st.info("Draft updated. Click `Save Edits` to apply.")
                         if do_save:
+                            st.session_state[saving_key] = True
                             prev_overrides = dict(st.session_state.get("bid_overrides", {}))
                             new_overrides = dict(prev_overrides)
                             audit_rows = []
@@ -2542,6 +2549,7 @@ def main() -> None:
                             with st.spinner("Saving adjustments and recalculating..."):
                                 st.session_state["bid_overrides"] = new_overrides
                                 ok, err = save_overrides_to_disk(new_overrides)
+                            st.session_state[saving_key] = False
                             if not ok:
                                 st.error(err)
                             st.session_state["tab1_save_notice"] = f"Saved {changed_rows} manual adjustments."
