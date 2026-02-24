@@ -7,7 +7,7 @@ DEFAULT_PATHS = {
     "state_data": "data/state_data.csv",
     "state_seg": "data/state_seg_data.csv",
     "channel_group": "data/channel_group_data.csv",
-    "channel_price_exp": "data/channel_price_exploration.csv",
+    "channel_price_exp": "data/channel_price_exploration_state.csv",
     "channel_state": "data/channel_group_state.csv",
 }
 OVERRIDES_PATH = Path("data/manual_overrides.json")

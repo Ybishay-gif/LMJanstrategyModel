@@ -90,7 +90,19 @@ def pick_scenario(rec_df: pd.DataFrame, price_eval: pd.DataFrame, settings: Sett
     preferred = ("AL", "Group 150 MCH")
     row = rec_df[(rec_df["State"] == preferred[0]) & (rec_df["Channel Groups"] == preferred[1])]
     if not row.empty:
-        return preferred
+        pop_pref = app.precompute_popup_options_for_state(rec_df, price_eval, preferred[0], settings)
+        pref_opts = (
+            pd.to_numeric(
+                pop_pref.loc[pop_pref["Channel Groups"] == preferred[1], "Bid Adj %"],
+                errors="coerce",
+            )
+            .dropna()
+            .astype(float)
+            .tolist()
+        )
+        rec_adj_pref = float(row.iloc[0].get("Applied Price Adjustment %", 0.0) or 0.0)
+        if any(not app.close_adj(o, rec_adj_pref) for o in pref_opts):
+            return preferred
 
     # fallback: first row with any valid popup options and at least one different adj
     for state in rec_df["State"].dropna().unique().tolist():
