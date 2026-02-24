@@ -3363,6 +3363,23 @@ def main() -> None:
                     first_row = filt_master.iloc[0]
                     selected_key = f"{first_row['State']}|{first_row['Channel Groups']}|{first_row['Segment']}"
                     st.session_state["px_selected_card_key"] = selected_key
+                detail_lookup = build_price_exploration_detail_lookup(detail_df)
+                state_s, channel_s, segment_s = str(selected_key).split("|", 2)
+                sdet_preview = detail_lookup.get(selected_key, pd.DataFrame()).copy()
+                # Right content-driven height: chart + KPI rows + table rows + visual breathing room.
+                table_rows = int(len(sdet_preview)) if sdet_preview is not None else 0
+                panel_height = int(820 + (table_rows * 38) + 100)
+                panel_height = max(980, min(panel_height, 1900))
+                st.markdown(
+                    f"""
+                    <style>
+                    [class*="st-key-tab4_cards_panel"] {{
+                        min-height: {panel_height}px;
+                    }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
                 p1, p2, p3 = st.columns([1, 1, 2])
                 page_size = p1.selectbox("Cards per page", options=[12, 24, 36, 60], index=1, key="tab4_px_page_size")
@@ -3373,13 +3390,10 @@ def main() -> None:
                 end_idx = min(start_idx + int(page_size), total_cards)
                 p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
                 page_df = filt_master.iloc[start_idx:end_idx].copy()
-                # Keep both panels aligned; left should usually show all cards without inner scroll.
-                panel_height = max(980, int(170 * len(page_df) + 120))
-
                 st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
-                    with fixed_height_container(panel_height, key="tab4_cards_scroll"):
+                    with st.container(border=True, key="tab4_cards_panel"):
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
                             card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
@@ -3410,9 +3424,7 @@ def main() -> None:
 
                 with right:
                     with fixed_height_container(panel_height, key="tab4_right_scroll"):
-                        detail_lookup = build_price_exploration_detail_lookup(detail_df)
-                        state_s, channel_s, segment_s = str(selected_key).split("|", 2)
-                        sdet = detail_lookup.get(selected_key, pd.DataFrame()).copy()
+                        sdet = sdet_preview.copy()
                         if sdet.empty:
                             st.info("No detail points found for the selected card.")
                         else:
