@@ -3231,7 +3231,7 @@ def main() -> None:
                 height: auto !important;
                 text-align: left !important;
                 color: #e2e8f0 !important;
-                font-size: 0.82rem !important;
+                font-size: 0.88rem !important;
                 line-height: 1.35 !important;
                 box-shadow: 0 0 0 1px rgba(45,212,191,0.22), 0 0 18px rgba(45,212,191,0.28), 0 10px 26px rgba(2,6,23,0.35) !important;
                 margin-bottom: 6px !important;
@@ -3245,6 +3245,7 @@ def main() -> None:
             [class*="st-key-px_card_"] button strong {
                 color: #f8fafc !important;
                 font-weight: 800 !important;
+                font-size: 1.02rem !important;
             }
             [class*="st-key-px_card_"] button em {
                 color: #67e8f9 !important;
@@ -3254,8 +3255,13 @@ def main() -> None:
             [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar {
                 width: 10px;
             }
-            [class*="st-key-tab4_cards_scroll"] > div,
-            [class*="st-key-tab4_right_scroll"] > div {
+            [class*="st-key-tab4_cards_scroll"] {
+                border: 1px solid rgba(45,212,191,0.62) !important;
+                border-radius: 14px !important;
+                box-shadow: 0 0 0 1px rgba(45,212,191,0.18), 0 8px 24px rgba(2,6,23,0.35);
+                background: linear-gradient(145deg, rgba(10,16,28,0.64), rgba(10,16,28,0.38));
+            }
+            [class*="st-key-tab4_right_scroll"] {
                 border: 1px solid rgba(45,212,191,0.62) !important;
                 border-radius: 14px !important;
                 box-shadow: 0 0 0 1px rgba(45,212,191,0.18), 0 8px 24px rgba(2,6,23,0.35);
@@ -3291,14 +3297,16 @@ def main() -> None:
                 box-shadow: 0 0 0 1px rgba(16,185,129,0.52), 0 0 18px rgba(16,185,129,0.27), 0 10px 28px rgba(2,6,23,0.5) !important;
             }
             .px-sep {
-                border-top: 1px solid rgba(148,163,184,0.32);
-                margin: 10px 0 12px 0;
+                height: 1px;
+                background: linear-gradient(90deg, rgba(148,163,184,0.06), rgba(45,212,191,0.7), rgba(148,163,184,0.06));
+                margin: 12px 0 12px 0;
             }
             .px-subhead {
-                color: #93c5fd;
-                font-size: 0.86rem;
+                color: #c7d2fe;
+                font-size: 0.90rem;
                 font-weight: 700;
-                margin: 2px 0 6px 0;
+                margin: 2px 0 8px 0;
+                letter-spacing: 0.2px;
             }
             </style>
             """,
