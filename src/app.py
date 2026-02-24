@@ -4,6 +4,10 @@ import os
 import hmac
 import base64
 import hashlib
+import secrets
+import smtplib
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -31,6 +35,7 @@ DEFAULT_PATHS = {
 OVERRIDES_PATH = Path("data/manual_overrides.json")
 AUTH_USERS_PATH = Path("data/auth_users.json")
 AUTH_ALLOWLIST_PATH = Path("data/allowed_emails.txt")
+ADMIN_EMAIL = "ybishay@kissterra.com"
 
 STRATEGY_SCALE = {
     "Strongest Momentum": 1.00,
@@ -1406,6 +1411,20 @@ def load_allowed_emails() -> set[str]:
     return out
 
 
+def save_allowed_emails(emails: set[str]) -> tuple[bool, str]:
+    try:
+        AUTH_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        rows = sorted({normalize_email(e) for e in emails if normalize_email(e)})
+        AUTH_ALLOWLIST_PATH.write_text("\n".join(rows) + ("\n" if rows else ""))
+        return True, ""
+    except Exception:
+        return False, "Failed to save allowlist."
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def load_auth_users() -> dict:
     try:
         if not AUTH_USERS_PATH.exists():
@@ -1448,12 +1467,83 @@ def verify_password(password: str, salt_b64: str, hash_b64: str, iterations: int
         return False
 
 
+def make_invite_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def build_invite_link(token: str) -> str:
+    base_url = str(os.getenv("APP_BASE_URL", "")).strip().rstrip("/")
+    if not base_url:
+        return f"?invite_token={token}"
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}invite_token={token}"
+
+
+def send_invite_email(email: str, link: str) -> tuple[bool, str]:
+    host = os.getenv("SMTP_HOST", "").strip()
+    port = int(os.getenv("SMTP_PORT", "587") or "587")
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASS", "").strip()
+    sender = os.getenv("SMTP_FROM", user).strip()
+    use_tls = str(os.getenv("SMTP_USE_TLS", "true")).strip().lower() in {"1", "true", "yes", "y"}
+    if not host or not sender:
+        return False, "SMTP is not configured (`SMTP_HOST` / `SMTP_FROM`)."
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = "Invite: Insurance Growth Navigator"
+        msg["From"] = sender
+        msg["To"] = email
+        msg.set_content(
+            "You were invited to Insurance Growth Navigator.\n"
+            f"Use this link to create your password:\n{link}\n\n"
+            "If you did not expect this invite, ignore this email."
+        )
+        with smtplib.SMTP(host, port, timeout=20) as s:
+            if use_tls:
+                s.starttls()
+            if user and password:
+                s.login(user, password)
+            s.send_message(msg)
+        return True, ""
+    except Exception as exc:
+        return False, f"Failed to send invite email: {exc}"
+
+
+def resolve_invite_token(users: dict, token: str) -> Optional[str]:
+    t = str(token or "").strip()
+    if not t:
+        return None
+    now = datetime.now(timezone.utc)
+    for email, rec in users.items():
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("invite_token", "")) != t:
+            continue
+        try:
+            exp = datetime.fromisoformat(str(rec.get("invite_expires_at", "")))
+        except Exception:
+            exp = None
+        if exp is None or exp < now:
+            return None
+        if not bool(rec.get("active", True)):
+            return None
+        return normalize_email(email)
+    return None
+
+
 def render_auth_gate() -> bool:
     if st.session_state.get("auth_ok", False):
         return True
 
     allowed = load_allowed_emails()
     users = load_auth_users()
+    qp_token = st.query_params.get("invite_token")
+    if isinstance(qp_token, list):
+        qp_token = qp_token[0] if qp_token else ""
+    invited_email = resolve_invite_token(users, str(qp_token or ""))
+    if invited_email:
+        st.session_state["auth_email"] = invited_email
+        st.session_state["auth_stage"] = "create"
 
     st.title("🔐 Secure Login")
     if not allowed:
@@ -1474,6 +1564,10 @@ def render_auth_gate() -> bool:
                 return False
             if e not in allowed:
                 st.error("Email is not authorized.")
+                return False
+            existing = users.get(e, {})
+            if isinstance(existing, dict) and not bool(existing.get("active", True)):
+                st.error("User access is disabled.")
                 return False
             st.session_state["auth_email"] = e
             if isinstance(users.get(e), dict) and users[e].get("password_hash"):
@@ -1502,12 +1596,17 @@ def render_auth_gate() -> bool:
                 st.error("Passwords do not match.")
                 return False
             salt_b64, hash_b64, iters = hash_password(p1)
+            prev = users.get(staged_email, {}) if isinstance(users.get(staged_email), dict) else {}
             users[staged_email] = {
                 "email": staged_email,
                 "salt": salt_b64,
                 "password_hash": hash_b64,
                 "iterations": int(iters),
-                "active": True,
+                "active": bool(prev.get("active", True)),
+                "invited_at": prev.get("invited_at", ""),
+                "last_login_at": now_iso(),
+                "invite_token": "",
+                "invite_expires_at": "",
             }
             ok, err = save_auth_users(users)
             if not ok:
@@ -1516,6 +1615,8 @@ def render_auth_gate() -> bool:
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.session_state["auth_stage"] = "password"
+            if "invite_token" in st.query_params:
+                st.query_params.clear()
             st.rerun()
         return False
 
@@ -1548,6 +1649,9 @@ def render_auth_gate() -> bool:
             if not ok:
                 st.error("Invalid email or password.")
                 return False
+            rec["last_login_at"] = now_iso()
+            users[staged_email] = rec
+            save_auth_users(users)
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.rerun()
@@ -1555,6 +1659,96 @@ def render_auth_gate() -> bool:
 
     st.session_state["auth_stage"] = "email"
     return False
+
+
+def render_settings_panel() -> None:
+    current_user = normalize_email(st.session_state.get("auth_user", ""))
+    if current_user != ADMIN_EMAIL:
+        st.error("Settings is available for admin only.")
+        return
+
+    users = load_auth_users()
+    allowed = load_allowed_emails()
+
+    st.subheader("⚙️ Access Settings")
+    rows = []
+    all_emails = sorted(set(allowed) | set(normalize_email(x) for x in users.keys()))
+    for e in all_emails:
+        rec = users.get(e, {}) if isinstance(users.get(e), dict) else {}
+        rows.append(
+            {
+                "Email": e,
+                "Has Password": bool(rec.get("password_hash")),
+                "Access": "Active" if bool(rec.get("active", True)) else "Revoked",
+                "Last Login": rec.get("last_login_at", ""),
+                "Invited At": rec.get("invited_at", ""),
+            }
+        )
+    users_df = pd.DataFrame(rows).sort_values("Email") if rows else pd.DataFrame(columns=["Email", "Has Password", "Access", "Last Login", "Invited At"])
+    render_formatted_table(users_df, use_container_width=True)
+
+    st.markdown("**Manage Existing User**")
+    if not users_df.empty:
+        c1, c2, c3 = st.columns([2, 1, 1])
+        picked = c1.selectbox("User", options=users_df["Email"].tolist(), key="settings_user_pick")
+        do_revoke = c2.button("Revoke Access", key="settings_revoke")
+        do_restore = c3.button("Restore Access", key="settings_restore")
+        if do_revoke and picked:
+            rec = users.get(picked, {}) if isinstance(users.get(picked), dict) else {}
+            rec["email"] = picked
+            rec["active"] = False
+            users[picked] = rec
+            ok, err = save_auth_users(users)
+            if ok:
+                st.success(f"Revoked access: {picked}")
+                st.rerun()
+            else:
+                st.error(err)
+        if do_restore and picked:
+            rec = users.get(picked, {}) if isinstance(users.get(picked), dict) else {}
+            rec["email"] = picked
+            rec["active"] = True
+            users[picked] = rec
+            allowed.add(picked)
+            ok1, err1 = save_auth_users(users)
+            ok2, err2 = save_allowed_emails(allowed)
+            if ok1 and ok2:
+                st.success(f"Restored access: {picked}")
+                st.rerun()
+            else:
+                st.error(err1 or err2)
+
+    st.markdown("**Invite New User**")
+    with st.form("invite_form", clear_on_submit=False):
+        new_email = st.text_input("Email to invite", placeholder="name@company.com")
+        send_btn = st.form_submit_button("Invite")
+    if send_btn:
+        e = normalize_email(new_email)
+        if "@" not in e:
+            st.error("Enter a valid email.")
+        else:
+            allowed.add(e)
+            rec = users.get(e, {}) if isinstance(users.get(e), dict) else {}
+            token = make_invite_token()
+            rec["email"] = e
+            rec["active"] = True
+            rec["invited_at"] = now_iso()
+            rec["invite_token"] = token
+            rec["invite_expires_at"] = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+            users[e] = rec
+            ok1, err1 = save_allowed_emails(allowed)
+            ok2, err2 = save_auth_users(users)
+            if not (ok1 and ok2):
+                st.error(err1 or err2)
+            else:
+                link = build_invite_link(token)
+                sent, msg = send_invite_email(e, link)
+                if sent:
+                    st.success(f"Invite sent to {e}.")
+                else:
+                    st.warning(msg)
+                    st.info(f"Share this invite link manually: {link}")
+                st.rerun()
 
 
 def nearest_available_adj(channel_group: str, target_adj: float, popup_state_df: pd.DataFrame) -> tuple[float, str]:
@@ -1937,13 +2131,22 @@ def main() -> None:
         return
 
     with st.sidebar:
-        st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
-        if st.button("Logout", key="auth_logout_btn"):
+        user_now = normalize_email(st.session_state.get("auth_user", ""))
+        is_admin = user_now == ADMIN_EMAIL
+        s1, s2 = st.columns(2)
+        if is_admin:
+            if s1.button("⚙️ Settings", key="auth_settings_btn", use_container_width=True):
+                st.session_state["show_settings"] = not st.session_state.get("show_settings", False)
+        else:
+            s1.markdown("&nbsp;")
+        if s2.button("🚪 Logout", key="auth_logout_btn", use_container_width=True):
             st.session_state["auth_ok"] = False
             st.session_state["auth_user"] = ""
             st.session_state["auth_stage"] = "email"
             st.session_state["auth_email"] = ""
+            st.session_state["show_settings"] = False
             st.rerun()
+        st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
         st.divider()
         dark_mode = st.toggle("Dark mode", value=True)
         fast_mode = st.toggle("Fast interaction mode", value=True, help="Reduces heavy chart rendering for faster clicks/saves.")
@@ -1952,6 +2155,9 @@ def main() -> None:
     plotly_template = "plotly_dark" if dark_mode else "plotly_white"
 
     st.title("Insurance Growth Navigator")
+    if st.session_state.get("show_settings", False):
+        render_settings_panel()
+        st.divider()
     st.markdown(
         """
         <div class="hero-card">
