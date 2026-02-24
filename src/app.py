@@ -1777,12 +1777,15 @@ def main() -> None:
         """
         <style>
         .kpi-tile {
-            border: 1px solid rgba(56,189,248,0.24);
+            border: 1px solid rgba(148,163,184,0.26);
             border-radius: 12px;
             padding: 10px 12px;
-            background: linear-gradient(145deg, rgba(15,23,42,0.78), rgba(17,24,39,0.62));
+            background: rgba(10,15,28,0.82);
             min-height: 84px;
+            margin-top: 6px;
             margin-bottom: 8px;
+            position: relative;
+            z-index: 1;
         }
         .kpi-label {
             color: #93c5fd;
@@ -3214,6 +3217,7 @@ def main() -> None:
                 border: 1px solid rgba(56,189,248,0.22);
                 border-radius: 14px;
                 padding: 12px 14px;
+                margin-bottom: 10px;
                 background:
                     radial-gradient(120% 120% at 0% 0%, rgba(14,165,233,0.12), rgba(14,165,233,0) 48%),
                     linear-gradient(145deg, rgba(15,23,42,0.90), rgba(17,24,39,0.85));
@@ -3366,6 +3370,7 @@ def main() -> None:
                                 selected_key = card_key
 
                 with right:
+                    st.markdown("**Selected Testing Detail**")
                     detail_lookup = build_price_exploration_detail_lookup(detail_df)
                     state_s, channel_s, segment_s = str(selected_key).split("|", 2)
                     sdet = detail_lookup.get(selected_key, pd.DataFrame()).copy()
