@@ -3373,11 +3373,12 @@ def main() -> None:
                 end_idx = min(start_idx + int(page_size), total_cards)
                 p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
                 page_df = filt_master.iloc[start_idx:end_idx].copy()
-                panel_height = 980
+                # Keep both panels aligned; left should usually show all cards without inner scroll.
+                panel_height = max(980, int(170 * len(page_df) + 120))
 
+                st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
-                    st.markdown("**Price Exploration Testing**")
                     with fixed_height_container(panel_height, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
                             ch_name = r["Channel Groups"]
@@ -3409,7 +3410,6 @@ def main() -> None:
 
                 with right:
                     with fixed_height_container(panel_height, key="tab4_right_scroll"):
-                        st.markdown("**Selected Testing Detail**")
                         detail_lookup = build_price_exploration_detail_lookup(detail_df)
                         state_s, channel_s, segment_s = str(selected_key).split("|", 2)
                         sdet = detail_lookup.get(selected_key, pd.DataFrame()).copy()
