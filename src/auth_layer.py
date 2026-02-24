@@ -356,7 +356,7 @@ def render_auth_gate() -> bool:
             st.session_state["auth_user"] = staged_email
             st.session_state["auth_stage"] = "password"
             if "invite_token" in st.query_params:
-                st.query_params.clear()
+                del st.query_params["invite_token"]
             st.rerun()
         return False
 
