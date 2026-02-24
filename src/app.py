@@ -1122,54 +1122,157 @@ def build_price_exploration_master_detail(
     price_eval_df: pd.DataFrame,
     settings: Settings,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    base = (
-        rec_df.groupby(["State", "Channel Groups", "Segment"], as_index=False)
-        .agg(
-            Bids=("Bids", "sum"),
-            Binds=("Binds", "sum"),
-            Clicks=("Clicks", "sum"),
-        )
-        .sort_values(["State", "Channel Groups"])
+    if rec_df.empty or price_eval_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    base = rec_df.groupby(["State", "Channel Groups", "Segment"], as_index=False).agg(
+        Bids=("Bids", "sum"),
+        Clicks=("Clicks", "sum"),
+        Binds=("Binds", "sum"),
+        **{"Avg. CPC": ("Avg. CPC", "mean")},
+        **{"Clicks to Binds Proxy": ("Clicks to Binds Proxy", "mean")},
+        **{"Bids to Clicks": ("Bids to Clicks", "mean")},
+        **{"Total Click Cost": ("Total Click Cost", "sum")},
     )
+    base = base.replace([np.inf, -np.inf], np.nan).fillna(0)
     if base.empty:
         return pd.DataFrame(), pd.DataFrame()
+    base["Row Win Rate"] = np.where(base["Bids"] > 0, base["Clicks"] / base["Bids"], 0.0)
+    base["Row Win Rate"] = np.where(base["Bids to Clicks"] > 0, base["Bids to Clicks"], base["Row Win Rate"])
+    base["Row C2B"] = np.where(base["Clicks to Binds Proxy"] > 0, base["Clicks to Binds Proxy"], 0.0)
+    base["Current Cost"] = np.where(
+        base["Total Click Cost"] > 0,
+        base["Total Click Cost"],
+        base["Clicks"] * base["Avg. CPC"],
+    )
+    base["SC Key"] = base["State"].astype(str) + "|" + base["Channel Groups"].astype(str)
 
-    masters: list[dict] = []
-    details: list[pd.DataFrame] = []
-    for _, row in base.iterrows():
-        state = str(row["State"])
-        channel_group = str(row["Channel Groups"])
-        segment = str(row["Segment"])
-        opts, src = build_popup_card_options(rec_df, price_eval_df, state, channel_group, settings)
-        if opts.empty:
-            continue
-
-        p = opts.copy()
-        p["State"] = state
-        p["Channel Groups"] = channel_group
-        p["Segment"] = segment
-        p["Source Used"] = src
-        p["Adj Label"] = p["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
-        p = p.sort_values("Bid Adj %")
-        details.append(p)
-
-        point_labels = " || ".join(p["Adj Label"].tolist())
-        masters.append(
-            {
-                "State": state,
-                "Channel Groups": channel_group,
-                "Segment": segment,
-                "Total Bids": float(row["Bids"]),
-                "Total Clicks": float(row["Clicks"]),
-                "Total Binds": float(row["Binds"]),
-                "Testing Points": point_labels,
-                "Testing Points Count": int(len(p)),
-                "Source Used": src,
-            }
-        )
-    if not masters:
+    pe = price_eval_df.copy()
+    pe = pe[
+        pe["Stat Sig Price Point"].fillna(False)
+        & (pe["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0)
+    ].copy()
+    min_adj = -30.0 if mode_factor(settings.optimization_mode) <= 0.5 else 0.0
+    pe = pe[pe["Price Adjustment Percent"].fillna(0) >= min_adj].copy()
+    if pe.empty:
         return pd.DataFrame(), pd.DataFrame()
-    return pd.DataFrame(masters), pd.concat(details, ignore_index=True)
+
+    bids_sig = max(float(settings.min_bids_price_sig), 1.0)
+    clicks_sig = max(float(settings.min_clicks_price_sig), 1.0)
+    pe["Sig Score"] = np.minimum(pe["Bids"].fillna(0) / bids_sig, pe["Clicks"].fillna(0) / clicks_sig)
+    pe["Sig Level"] = np.select(
+        [pe["Sig Score"] >= 2.5, pe["Sig Score"] >= 1.5],
+        ["Strong", "Medium"],
+        default="Weak",
+    )
+    pe = pe[pe["Sig Level"] != "Weak"].copy()
+    if pe.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    pe["Sig Icon"] = pe["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
+
+    grp_cols = ["Channel Groups", "Price Adjustment Percent"]
+    if "State" in pe.columns:
+        grp_cols = ["State", "Channel Groups", "Price Adjustment Percent"]
+
+    cand_state = pe.groupby(grp_cols, as_index=False).agg(
+        Test_Bids=("Bids", "sum"),
+        Test_Clicks=("Clicks", "sum"),
+        **{"Win Rate Uplift": ("Win Rate Lift %", "mean")},
+        **{"CPC Uplift": ("CPC Lift %", "mean")},
+        Sig_Score=("Sig Score", "mean"),
+    )
+    cand_state["Sig Level"] = np.select(
+        [cand_state["Sig_Score"] >= 2.5, cand_state["Sig_Score"] >= 1.5],
+        ["Strong", "Medium"],
+        default="Weak",
+    )
+    cand_state = cand_state[cand_state["Sig Level"] != "Weak"].copy()
+    cand_state["Sig Icon"] = cand_state["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
+
+    if "State" in cand_state.columns:
+        cand_ch = cand_state.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False).agg(
+            Test_Bids=("Test_Bids", "sum"),
+            Test_Clicks=("Test_Clicks", "sum"),
+            **{"Win Rate Uplift": ("Win Rate Uplift", "mean")},
+            **{"CPC Uplift": ("CPC Uplift", "mean")},
+            Sig_Score=("Sig_Score", "mean"),
+        )
+        cand_ch["Sig Level"] = np.select(
+            [cand_ch["Sig_Score"] >= 2.5, cand_ch["Sig_Score"] >= 1.5],
+            ["Strong", "Medium"],
+            default="Weak",
+        )
+        cand_ch = cand_ch[cand_ch["Sig Level"] != "Weak"].copy()
+        cand_ch["Sig Icon"] = cand_ch["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
+
+        state_pairs = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates()
+        merged_state = state_pairs.merge(cand_state, on=["State", "Channel Groups"], how="left")
+        has_state = merged_state["Price Adjustment Percent"].notna()
+        detail_state = merged_state[has_state].copy()
+        detail_state["Source Used"] = "State+Channel"
+
+        missing_pairs = state_pairs[~state_pairs["SC Key"].isin(detail_state["SC Key"].dropna().unique().tolist())].copy()
+        detail_fallback = missing_pairs.merge(cand_ch, on="Channel Groups", how="left")
+        detail_fallback = detail_fallback[detail_fallback["Price Adjustment Percent"].notna()].copy()
+        detail_fallback["Source Used"] = "Channel Fallback"
+        detail_keys = pd.concat([detail_state, detail_fallback], ignore_index=True)
+    else:
+        detail_keys = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates().merge(
+            cand_state,
+            on=["Channel Groups"],
+            how="left",
+        )
+        detail_keys = detail_keys[detail_keys["Price Adjustment Percent"].notna()].copy()
+        detail_keys["Source Used"] = "Channel"
+
+    if detail_keys.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    detail = detail_keys.merge(
+        base[
+            [
+                "State", "Channel Groups", "Segment", "Bids", "Clicks", "Binds",
+                "Avg. CPC", "Current Cost", "Row Win Rate", "Row C2B",
+            ]
+        ],
+        on=["State", "Channel Groups", "Segment"],
+        how="left",
+    )
+    wr_lift = detail["Win Rate Uplift"].fillna(0.0)
+    allow_negative_moves = mode_factor(settings.optimization_mode) <= 0.5
+    wr_effect = wr_lift if allow_negative_moves else np.maximum(wr_lift, 0.0)
+    detail["Additional Clicks"] = detail["Bids"].fillna(0.0) * detail["Row Win Rate"].fillna(0.0) * wr_effect
+    detail["Additional Binds"] = detail["Additional Clicks"] * detail["Row C2B"].fillna(0.0)
+    detail["Expected Total Cost"] = (
+        (detail["Clicks"].fillna(0.0) + detail["Additional Clicks"])
+        * detail["Avg. CPC"].fillna(0.0)
+        * (1.0 + detail["CPC Uplift"].fillna(0.0))
+    )
+    detail["Additional Budget Needed"] = detail["Expected Total Cost"] - detail["Current Cost"].fillna(0.0)
+    detail["Adj Label"] = detail["Price Adjustment Percent"].map(lambda x: f"{float(x):+.0f}%")
+    detail = detail.rename(
+        columns={
+            "Price Adjustment Percent": "Bid Adj %",
+            "Test_Bids": "Test Bids",
+            "Test_Clicks": "Test Clicks",
+        }
+    )
+    detail = detail.sort_values(["State", "Channel Groups", "Segment", "Bid Adj %"]).reset_index(drop=True)
+
+    master = detail.groupby(["State", "Channel Groups", "Segment"], as_index=False).agg(
+        **{"Total Bids": ("Bids", "max")},
+        **{"Total Clicks": ("Clicks", "max")},
+        **{"Total Binds": ("Binds", "max")},
+        **{"Testing Points Count": ("Bid Adj %", "count")},
+        **{"Source Used": ("Source Used", "first")},
+    )
+    points_map = (
+        detail.groupby(["State", "Channel Groups", "Segment"])["Adj Label"]
+        .apply(lambda s: " || ".join(s.tolist()))
+        .reset_index(name="Testing Points")
+    )
+    master = master.merge(points_map, on=["State", "Channel Groups", "Segment"], how="left")
+    return master, detail
 
 
 def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, cpb_impact: float, sig_level: str) -> str:
