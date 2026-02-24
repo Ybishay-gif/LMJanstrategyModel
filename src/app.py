@@ -164,6 +164,30 @@ def strategy_max_adjustment(bucket: str, settings: Settings) -> float:
     return settings.max_adj_minimal
 
 
+def strategy_min_adjustment(bucket: str, settings: Settings) -> float:
+    f = mode_factor(settings.optimization_mode)
+    # Growth-focused modes do not cut bids by default.
+    if f >= 0.75:
+        return 0.0
+    # Balanced allows mild pullback in weak strategy states.
+    if f >= 0.5:
+        if bucket == "Strongest Momentum":
+            return 0.0
+        if bucket == "Moderate Momentum":
+            return -5.0
+        if bucket == "Minimal Growth":
+            return -10.0
+        return -15.0
+    # Cost-leaning modes allow broader pullback while respecting strategy.
+    if bucket == "Strongest Momentum":
+        return -5.0
+    if bucket == "Moderate Momentum":
+        return -10.0
+    if bucket == "Minimal Growth":
+        return -15.0
+    return -25.0
+
+
 def _build_effect_dicts(price_eval_df: pd.DataFrame, settings: Settings) -> tuple[dict, dict]:
     px = price_eval_df.copy()
     if "Stat Sig Price Point" in px.columns:
@@ -200,7 +224,6 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         px = px[px["Stat Sig Price Point"] == True]
     if "CPC Lift %" in px.columns:
         px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
-    px = px[(px["Price Adjustment Percent"].fillna(0) >= 0) & (px["Win Rate Lift %"].fillna(0) >= 0)]
 
     state_curves: dict[tuple[str, str], pd.DataFrame] = {}
     if "State" in px.columns:
@@ -213,6 +236,17 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
     def _pick_from_curve(curve: pd.DataFrame, row: pd.Series) -> Optional[pd.Series]:
         if curve is None or curve.empty:
             return None
+        curve = curve.copy()
+        bucket = str(row.get("Strategy Bucket", "") or "")
+        min_adj = strategy_min_adjustment(bucket, settings)
+        max_adj = strategy_max_adjustment(bucket, settings)
+        curve = curve[
+            (pd.to_numeric(curve["Price Adjustment Percent"], errors="coerce").fillna(0.0) >= min_adj)
+            & (pd.to_numeric(curve["Price Adjustment Percent"], errors="coerce").fillna(0.0) <= max_adj)
+        ]
+        if curve.empty:
+            return None
+
         bids = float(row.get("Bids", 0) or 0)
         clicks = float(row.get("Clicks", 0) or 0)
         avg_cpc = float(row.get("Avg. CPC", 0) or 0)
@@ -238,6 +272,26 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         if pd.notna(target_cpb) and target_cpb > 0 and pd.notna(actual_cpb) and actual_cpb > 0:
             actual_perf = target_cpb / actual_cpb
 
+        f = mode_factor(settings.optimization_mode)
+        # Strategy-tuned tradeoff: momentum states bias to growth; constrained states bias to CPC/perf.
+        wr_w = 1.0 + 0.8 * f
+        cpc_w = 0.55 + 1.20 * (1 - f)
+        perf_w = 0.30 + 0.90 * (1 - f)
+        save_w = 0.20 + 0.70 * (1 - f)
+        if bucket == "Strongest Momentum":
+            wr_w *= 1.35
+            cpc_w *= 0.70
+        elif bucket == "Moderate Momentum":
+            wr_w *= 1.15
+            cpc_w *= 0.90
+        elif bucket == "Minimal Growth":
+            wr_w *= 0.80
+            cpc_w *= 1.30
+        elif bucket in {"LTV Constrained", "Closure Constrained", "Inactive/Low Spend"}:
+            wr_w *= 0.65
+            cpc_w *= 1.55
+            perf_w *= 1.20
+
         scored = []
         for _, c in curve.iterrows():
             wr_lift = float(c.get("Win Rate Lift %", 0) or 0)
@@ -251,17 +305,37 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
             if pd.notna(target_cpb) and target_cpb > 0 and pd.notna(new_cpb) and new_cpb > 0:
                 new_perf = target_cpb / new_cpb
             perf_drop = 0.0
+            perf_gain = 0.0
             if pd.notna(actual_perf) and pd.notna(new_perf):
                 perf_drop = max(actual_perf - new_perf, 0.0)
+                perf_gain = new_perf - actual_perf
             perf_ok = True
             if pd.notna(new_perf):
                 perf_ok = (new_perf >= settings.min_new_performance) and (perf_drop <= settings.max_perf_drop)
+            adj = float(c.get("Price Adjustment Percent", 0) or 0)
+            utility = (
+                wr_w * wr_lift
+                - cpc_w * max(cpc_lift, 0.0)
+                + save_w * max(-cpc_lift, 0.0)
+                + perf_w * perf_gain
+            )
+            if f >= 0.75 and adj < 0:
+                utility -= 2.0
+            if f <= 0.50 and adj < 0:
+                utility += 0.02 * abs(adj)
+            if f <= 0.25 and bucket == "Strongest Momentum" and adj < 0:
+                utility -= 0.4
             scored.append(
                 {
                     "cand": c,
                     "add_binds": add_binds,
                     "add_clicks": add_clicks,
                     "perf_drop": perf_drop,
+                    "perf_gain": perf_gain,
+                    "wr_lift": wr_lift,
+                    "cpc_lift": cpc_lift,
+                    "adj": adj,
+                    "utility": utility,
                     "new_perf": new_perf,
                     "perf_ok": perf_ok,
                 }
@@ -269,17 +343,25 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         if not scored:
             return None
         valid = [x for x in scored if x["perf_ok"]]
-        if valid:
+        pool = valid if valid else scored
+        if pool:
+            if settings.optimization_mode == "Max Growth" and bucket == "Strongest Momentum":
+                best = sorted(
+                    pool,
+                    key=lambda x: (x["wr_lift"], x["add_binds"], -x["cpc_lift"], x["adj"]),
+                    reverse=True,
+                )[0]
+                return best["cand"]
             best = sorted(
-                valid,
-                key=lambda x: (x["add_binds"], -float(x["cand"].get("CPC Lift %", 0) or 0), -float(x["cand"].get("Price Adjustment Percent", 0) or 0)),
+                pool,
+                key=lambda x: (x["utility"], x["wr_lift"], x["add_binds"], -x["cpc_lift"]),
                 reverse=True,
             )[0]
             return best["cand"]
         # If all points hurt performance too much, choose the most conservative feasible degradation.
         best = sorted(
             scored,
-            key=lambda x: (x["perf_drop"], -x["add_binds"], float(x["cand"].get("Price Adjustment Percent", 0) or 0)),
+            key=lambda x: (x["perf_drop"], -x["utility"], -x["add_binds"], x["adj"]),
         )[0]
         return best["cand"]
 
@@ -705,18 +787,29 @@ def build_model_tables(
     # Growth is based on win-rate uplift applied to the row's bid volume.
     rec["Lift Proxy %"] = rec["Win Rate Lift %"]
     no_growth = rec["Win Rate Lift %"] < 0
-    rec.loc[no_growth, "Suggested Price Adjustment %"] = 0
-    rec.loc[no_growth, "Applied Price Adjustment %"] = 0
-    rec.loc[no_growth, "Clicks Lift %"] = 0
-    rec.loc[no_growth, "Win Rate Lift %"] = 0
-    rec.loc[no_growth, "Lift Proxy %"] = 0
-    rec.loc[no_growth, "CPC Lift %"] = 0
+    allow_negative_moves = mode_factor(settings.optimization_mode) <= 0.5
+    if not allow_negative_moves:
+        rec.loc[no_growth, "Suggested Price Adjustment %"] = 0
+        rec.loc[no_growth, "Applied Price Adjustment %"] = 0
+        rec.loc[no_growth, "Clicks Lift %"] = 0
+        rec.loc[no_growth, "Win Rate Lift %"] = 0
+        rec.loc[no_growth, "Lift Proxy %"] = 0
+        rec.loc[no_growth, "CPC Lift %"] = 0
+    else:
+        # In balanced/cost modes keep negative win-rate moves only if they reduce CPC.
+        economically_bad = no_growth & (rec["CPC Lift %"] >= 0)
+        rec.loc[economically_bad, "Suggested Price Adjustment %"] = 0
+        rec.loc[economically_bad, "Applied Price Adjustment %"] = 0
+        rec.loc[economically_bad, "Clicks Lift %"] = 0
+        rec.loc[economically_bad, "Win Rate Lift %"] = 0
+        rec.loc[economically_bad, "Lift Proxy %"] = 0
+        rec.loc[economically_bad, "CPC Lift %"] = 0
 
     fallback_win_rate = pd.Series(np.where(rec["Bids"] > 0, rec["Clicks"] / rec["Bids"], 0), index=rec.index)
     current_win_rate = rec["Bids to Clicks"].combine_first(fallback_win_rate)
     rec["Test-based Additional Clicks"] = np.where(
         rec["Has Sig Price Evidence"],
-        rec["Bids"].fillna(0) * current_win_rate.fillna(0) * rec["Win Rate Lift %"].clip(lower=0),
+        rec["Bids"].fillna(0) * current_win_rate.fillna(0) * rec["Win Rate Lift %"],
         0.0,
     )
     rec["Model-based Additional Clicks"] = 0.0
@@ -910,7 +1003,8 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     p = p[p["Channel Groups"] == channel_group].copy()
     if p.empty:
         return pd.DataFrame(), "None"
-    p = p[p["Price Adjustment Percent"].fillna(0) >= 0].copy()
+    min_adj = -30.0 if mode_factor(settings.optimization_mode) <= 0.5 else 0.0
+    p = p[p["Price Adjustment Percent"].fillna(0) >= min_adj].copy()
     p = p[p["Stat Sig Price Point"] == True].copy()
     p = p[p["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0].copy()
     if p.empty:
@@ -970,12 +1064,14 @@ def build_popup_card_options(
     cur_cpb = (cur_cost / cur_binds) if cur_binds > 0 else np.nan
 
     out_rows = []
+    allow_negative_moves = mode_factor(settings.optimization_mode) <= 0.5
     for _, cr in candidates.sort_values("Price Adjustment Percent").iterrows():
         wr_l = float(cr.get("Win Rate Lift %", 0) or 0)
         cpc_l = float(cr.get("CPC Lift %", 0) or 0)
-        add_clicks = float((rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0)).sum())
-        add_binds = float((rsel["Bids"].fillna(0) * base_wr * max(wr_l, 0) * c2b).sum())
-        exp_cost = float(((rsel["Clicks"] + (rsel["Bids"] * base_wr * max(wr_l, 0))) * rsel["Avg. CPC"] * (1 + cpc_l)).sum())
+        wr_effect = wr_l if allow_negative_moves else max(wr_l, 0)
+        add_clicks = float((rsel["Bids"].fillna(0) * base_wr * wr_effect).sum())
+        add_binds = float((rsel["Bids"].fillna(0) * base_wr * wr_effect * c2b).sum())
+        exp_cost = float(((rsel["Clicks"] + (rsel["Bids"] * base_wr * wr_effect)) * rsel["Avg. CPC"] * (1 + cpc_l)).sum())
         new_cpb = (exp_cost / (cur_binds + add_binds)) if (cur_binds + add_binds) > 0 else np.nan
         cpb_impact = (new_cpb / cur_cpb - 1) if pd.notna(new_cpb) and pd.notna(cur_cpb) and cur_cpb > 0 else np.nan
         out_rows.append(
@@ -1452,6 +1548,9 @@ def main() -> None:
         perform_logout()
         return
 
+    if "global_optimization_mode" not in st.session_state:
+        st.session_state["global_optimization_mode"] = "Balanced"
+
     user_now = normalize_email(st.session_state.get("auth_user", ""))
     is_admin = user_now == ADMIN_EMAIL
     view = qp_value("view", "main").strip().lower() or "main"
@@ -1522,12 +1621,7 @@ def main() -> None:
         max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 40, 25, 1)
         min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
-        optimization_mode = st.select_slider(
-            "Growth vs Cost Optimization",
-            options=OPTIMIZATION_MODES,
-            value="Balanced",
-            help="Max Growth favors higher win-rate tests with wider CPC tolerance. Optimize Cost tightens CPC controls.",
-        )
+        optimization_mode = st.session_state.get("global_optimization_mode", "Balanced")
         min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.65, 0.01)
         roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
@@ -2147,6 +2241,19 @@ def main() -> None:
                     "Expected_Additional_Clicks", "Expected_Additional_Binds", "Additional Budget Required"
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 render_formatted_table(seg_show, use_container_width=True)
+
+                st.markdown("**Growth vs Cost Strategy**")
+                st.select_slider(
+                    "Recommendation Strategy",
+                    options=OPTIMIZATION_MODES,
+                    value=settings.optimization_mode,
+                    key="global_optimization_mode",
+                    help="Controls recommendation aggressiveness while respecting state product strategy.",
+                )
+                st.caption(
+                    f"Mode active: `{st.session_state.get('global_optimization_mode', settings.optimization_mode)}` | "
+                    f"CPC cap: {effective_cpc_cap_pct(settings):.0f}%"
+                )
 
                 st.markdown("**📌 Channel Groups In This State**")
                 state_channels = rec_df[rec_df["State"] == selected_state].copy()
