@@ -3363,13 +3363,25 @@ def main() -> None:
                     first_row = filt_master.iloc[0]
                     selected_key = f"{first_row['State']}|{first_row['Channel Groups']}|{first_row['Segment']}"
                     st.session_state["px_selected_card_key"] = selected_key
+
+                p1, p2, p3 = st.columns([1, 1, 2])
+                page_size = p1.selectbox("Cards per page", options=[4, 6, 8, 10, 12], index=1, key="tab4_px_page_size")
+                total_cards = int(len(filt_master))
+                page_count = max((total_cards + int(page_size) - 1) // int(page_size), 1)
+                page_num = int(p2.number_input("Page", min_value=1, max_value=page_count, value=1, step=1, key="tab4_px_page_num"))
+                start_idx = (page_num - 1) * int(page_size)
+                end_idx = min(start_idx + int(page_size), total_cards)
+                p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
+                page_df = filt_master.iloc[start_idx:end_idx].copy()
+
                 detail_lookup = build_price_exploration_detail_lookup(detail_df)
                 state_s, channel_s, segment_s = str(selected_key).split("|", 2)
                 sdet_preview = detail_lookup.get(selected_key, pd.DataFrame()).copy()
-                # Right content-driven height: chart + KPI rows + table rows + visual breathing room.
                 table_rows = int(len(sdet_preview)) if sdet_preview is not None else 0
-                panel_height = int(820 + (table_rows * 38) + 100)
-                panel_height = max(980, min(panel_height, 1900))
+                right_height = int(820 + (table_rows * 38) + 100)
+                left_height = int(160 * len(page_df) + 120)
+                panel_height = max(right_height, left_height)
+                panel_height = max(980, min(panel_height, 2200))
                 st.markdown(
                     f"""
                     <style>
@@ -3380,16 +3392,6 @@ def main() -> None:
                     """,
                     unsafe_allow_html=True,
                 )
-
-                p1, p2, p3 = st.columns([1, 1, 2])
-                page_size = p1.selectbox("Cards per page", options=[12, 24, 36, 60], index=1, key="tab4_px_page_size")
-                total_cards = int(len(filt_master))
-                page_count = max((total_cards + int(page_size) - 1) // int(page_size), 1)
-                page_num = int(p2.number_input("Page", min_value=1, max_value=page_count, value=1, step=1, key="tab4_px_page_num"))
-                start_idx = (page_num - 1) * int(page_size)
-                end_idx = min(start_idx + int(page_size), total_cards)
-                p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
-                page_df = filt_master.iloc[start_idx:end_idx].copy()
                 st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
