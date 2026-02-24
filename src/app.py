@@ -2155,11 +2155,11 @@ def main() -> None:
                         ]
                         cg_state_cols = [c for c in cg_state_cols if c in cg_state.columns]
                         table_df = cg_state[cg_state_cols].copy()
+                        popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         table_df["Selected Price Adj."] = table_df["Rec. Bid Adj."]
                         table_df["Select"] = False
                         table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
-                        popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         table_df["Adj Selection"] = ""
                         table_df["Adj Options"] = [[] for _ in range(len(table_df))]
                         table_df["Adj Options JSON"] = ["[]" for _ in range(len(table_df))]
@@ -2191,6 +2191,17 @@ def main() -> None:
                             current_adj = float(table_df.at[idx, "Selected Price Adj."])
                             selected_label = next((lb for lb in labels if parse_adj_from_label(lb) == current_adj), labels[0])
                             table_df.at[idx, "Adj Selection"] = selected_label
+                            # For manual selections, force row-level expected metrics from the same
+                            # state+channel adjustment candidate set used in the dropdown.
+                            if table_df.at[idx, "Selection Source"] == "Manual adjustment" and not ch_opts.empty:
+                                m = ch_opts.copy()
+                                m["dist"] = (pd.to_numeric(m["Bid Adj %"], errors="coerce").fillna(0.0) - current_adj).abs()
+                                best = m.sort_values(["dist", "Bid Adj %"], ascending=[True, True]).iloc[0]
+                                table_df.at[idx, "Expected Additional Clicks"] = float(best.get("Additional Clicks", table_df.at[idx, "Expected Additional Clicks"]) or 0.0)
+                                table_df.at[idx, "Expected Additional Binds"] = float(best.get("Additional Binds", table_df.at[idx, "Expected Additional Binds"]) or 0.0)
+                                table_df.at[idx, "CPC Lift %"] = float(best.get("CPC Uplift", table_df.at[idx, "CPC Lift %"]) or 0.0)
+                                table_df.at[idx, "Expected Total Cost"] = float(best.get("Expected Total Cost", table_df.at[idx, "Expected Total Cost"]) or 0.0)
+                                table_df.at[idx, "Additional Budget Needed"] = float(best.get("Additional Budget Needed", table_df.at[idx, "Additional Budget Needed"]) or 0.0)
                         table_df = table_df[
                             [
                                 "Channel Groups",
