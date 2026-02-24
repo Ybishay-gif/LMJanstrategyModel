@@ -3210,24 +3210,18 @@ def main() -> None:
                     for _, r in page_df.iterrows():
                         card_key = f"{r['State']}|{r['Channel Groups']}|{r['Segment']}"
                         active = card_key == st.session_state.get("px_selected_card_key")
-                        card_cls = "px-card px-card-selected" if active else "px-card"
-                        active_label = "<span class='px-chip' style='border-color:rgba(16,185,129,0.65);color:#6ee7b7;'>Selected</span>" if active else ""
-                        st.markdown(
-                            (
-                                f"<div class='{card_cls}'>"
-                                f"<div class='px-title'>{r['State']} · {r['Channel Groups']}</div>"
-                                f"<div class='px-sub'>Segment: {r['Segment']} | Binds: {r['Total Binds']:,.0f} | Bids: {r['Total Bids']:,.0f}</div>"
-                                f"<div class='px-points'>Test points: {r['Testing Points']}</div>"
-                                "<div class='px-chip-row'>"
-                                f"<span class='px-chip'>{int(r['Testing Points Count'])} points</span>"
-                                f"<span class='px-chip'>{r['Source Used']}</span>"
-                                f"{active_label}"
-                                "</div>"
-                                "</div>"
-                            ),
-                            unsafe_allow_html=True,
+                        card_label = (
+                            f"{r['State']} · {r['Channel Groups']}\n"
+                            f"Segment: {r['Segment']} | Binds: {r['Total Binds']:,.0f} | Bids: {r['Total Bids']:,.0f}\n"
+                            f"Test points: {r['Testing Points']}\n"
+                            f"{int(r['Testing Points Count'])} points | {r['Source Used']}"
                         )
-                        if st.button("Open", key=f"px_open_{card_key}", use_container_width=True):
+                        if st.button(
+                            card_label,
+                            key=f"px_card_{card_key}",
+                            use_container_width=True,
+                            type="primary" if active else "secondary",
+                        ):
                             st.session_state["px_selected_card_key"] = card_key
                             selected_key = card_key
 
