@@ -3567,12 +3567,53 @@ def main() -> None:
                                     "<extra></extra>"
                                 ),
                             )
+                            ev = bar_df[["Adj Label", "Source Used", "Sig Level"]].drop_duplicates().copy()
+                            ev["Evidence Type"] = np.select(
+                                [
+                                    (ev["Source Used"] == "State+Channel") & (ev["Sig Level"] == "Strong"),
+                                    (ev["Source Used"] == "State+Channel") & (ev["Sig Level"] != "Strong"),
+                                    (ev["Source Used"] == "Channel Fallback"),
+                                    (ev["Source Used"] == "Channel"),
+                                ],
+                                [
+                                    "State+Channel Strong",
+                                    "State+Channel Medium",
+                                    "Channel Fallback",
+                                    "Channel Only",
+                                ],
+                                default="Other",
+                            )
+                            y_top = max(float(pd.to_numeric(melted["Change"], errors="coerce").fillna(0).max()), 0.02)
+                            ev["Y"] = y_top * 1.12
+                            ev_style = {
+                                "State+Channel Strong": dict(color="#22c55e", symbol="circle"),
+                                "State+Channel Medium": dict(color="#eab308", symbol="circle"),
+                                "Channel Fallback": dict(color="#38bdf8", symbol="diamond"),
+                                "Channel Only": dict(color="#67e8f9", symbol="diamond-open"),
+                                "Other": dict(color="#94a3b8", symbol="x"),
+                            }
+                            for ev_name, ev_g in ev.groupby("Evidence Type"):
+                                stl = ev_style.get(ev_name, ev_style["Other"])
+                                fig_px.add_trace(
+                                    go.Scatter(
+                                        x=ev_g["Adj Label"],
+                                        y=ev_g["Y"],
+                                        mode="markers",
+                                        marker=dict(size=10, color=stl["color"], symbol=stl["symbol"], line=dict(width=1, color="#0b1220")),
+                                        name=ev_name,
+                                        showlegend=True,
+                                        hovertemplate=(
+                                            "Evidence: " + ev_name + "<br>"
+                                            "Test Point: %{x}<extra></extra>"
+                                        ),
+                                    )
+                                )
                             fig_px.update_layout(
                                 margin=dict(l=0, r=0, t=48, b=0),
                                 yaxis_tickformat=".0%",
                                 yaxis_title="Percent Change",
                                 xaxis_title="Bid Adjustment Test Point",
-                                legend_title_text="Metric",
+                                legend_title_text="Metric / Evidence",
                                 paper_bgcolor="rgba(0,0,0,0)",
                                 plot_bgcolor="rgba(0,0,0,0)",
                             )
