@@ -1811,6 +1811,35 @@ def main() -> None:
                 seg_tbl = seg_tbl.rename(columns={"Combined_Ratio": "Combined Ratio"})
                 render_formatted_table(seg_tbl, use_container_width=True)
 
+        st.markdown("**State Strategy vs Actual Indicator**")
+        indicator_view = map_df0[[
+            "State", "Strategy Bucket", "Conflict Arrow", "Conflict Level", "Performance Tone",
+            "ROE Performance Group", "Performance Stat Sig",
+            "ROE", "Combined Ratio", "Performance", "Binds", "Quotes to Binds", "CPB", "Avg. MRLTV"
+        ]].sort_values(["Conflict Level", "State"])
+        indicator_view["Indicator"] = np.where(
+            indicator_view["Performance Tone"] == "Good",
+            "🟢",
+            np.where(indicator_view["Performance Tone"] == "Poor", "🔴", "🟡"),
+        )
+        indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
+        indicator_view["Q2B"] = indicator_view["Quotes to Binds"]
+        render_formatted_table(
+            indicator_view[["State", "Strategy Bucket", "ROE Performance Group", "Performance Stat Sig", "Match", "ROE", "Combined Ratio", "Performance", "Binds", "Q2B", "CPB", "Avg. MRLTV"]],
+            use_container_width=True,
+        )
+        st.markdown("**ROE-Based State Performance Layer**")
+        state_perf_layer = (
+            map_df0.groupby(["ROE Performance Group", "Performance Stat Sig"], as_index=False)
+            .agg(
+                States=("State", lambda x: ", ".join(sorted(set(x)))),
+                Rows=("State", "count"),
+                Binds=("Binds", "sum"),
+            )
+            .sort_values(["Performance Stat Sig", "Rows"], ascending=[False, False])
+        )
+        render_formatted_table(state_perf_layer, use_container_width=True)
+
     with tabs[1]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
         map_df["Expected_Additional_Clicks"] = map_df["Expected_Additional_Clicks"].fillna(0)
@@ -2170,8 +2199,6 @@ def main() -> None:
                         table_df = cg_state[cg_state_cols].copy()
                         popup_state_df = precompute_popup_options_for_state(rec_df, price_eval, selected_state, settings)
                         table_df["Selected Price Adj."] = table_df["Rec. Bid Adj."]
-                        table_df["Select"] = False
-                        table_df["Apply"] = False
                         table_df["Selection Source"] = "Suggested"
                         table_df["Adj Selection"] = ""
                         table_df["Adj Options"] = [[] for _ in range(len(table_df))]
@@ -2181,7 +2208,6 @@ def main() -> None:
                             okey = f"{selected_state}|{rr['Channel Groups']}"
                             ov = st.session_state["bid_overrides"].get(okey, {})
                             if isinstance(ov, dict) and ov.get("apply", False):
-                                table_df.at[idx, "Apply"] = True
                                 table_df.at[idx, "Selected Price Adj."] = float(ov.get("requested_adj", ov.get("adj", rr["Rec. Bid Adj."])))
                                 table_df.at[idx, "Selection Source"] = "Manual adjustment"
                             ch = str(rr["Channel Groups"])
@@ -2239,7 +2265,6 @@ def main() -> None:
                         table_df = table_df[
                             [
                                 "Channel Groups",
-                                "Select",
                                 "Bids",
                                 "SOV",
                                 "Clicks",
@@ -2254,7 +2279,6 @@ def main() -> None:
                                 "Expected Additional Clicks",
                                 "Expected Additional Binds",
                                 "CPC Lift %",
-                                "Apply",
                                 "Selection Source",
                                 "Adj Options",
                                 "Adj Options JSON",
@@ -2278,7 +2302,6 @@ def main() -> None:
                             }
                         )
 
-                        selected_groups: list[str] = []
                         edited = grid_df.copy()
                         draft_key = f"tab1_grid_draft_{selected_state}"
                         prev = st.session_state.get(draft_key)
@@ -2291,9 +2314,7 @@ def main() -> None:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
                             gb.configure_grid_options(singleClickEdit=True, stopEditingWhenCellsLoseFocus=True)
-                            gb.configure_selection("multiple", use_checkbox=True)
                             gb.configure_column("Channel Groups", editable=False, pinned="left", width=180)
-                            gb.configure_column("Select", editable=True, width=64)
                             gb.configure_column("Bids", editable=False, width=86, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
                             gb.configure_column("SOV", editable=False, width=76, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
                             gb.configure_column("Clicks", editable=False, width=84, type=["numericColumn"], valueFormatter="value == null ? '' : Math.round(value).toLocaleString()")
@@ -2329,7 +2350,6 @@ def main() -> None:
                             gb.configure_column("Expected Additional Clicks", editable=False, width=126, type=["numericColumn"], valueFormatter="(value == null || isNaN(Number(value))) ? '0' : Math.round(Number(value)).toLocaleString()")
                             gb.configure_column("Expected Additional Binds", editable=False, width=124, type=["numericColumn"], valueFormatter="value == null ? '' : Number(value).toFixed(2)")
                             gb.configure_column("CPC Lift %", editable=False, width=88, type=["numericColumn"], valueFormatter="value == null ? '' : (value * 100).toFixed(0) + '%'")
-                            gb.configure_column("Apply", editable=True, width=70)
                             gb.configure_column("Selection Source", editable=False, width=108)
                             gb.configure_column("Adj Options", hide=True)
                             gb.configure_column("Adj Options JSON", hide=True)
@@ -2350,16 +2370,13 @@ def main() -> None:
                                 update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
                                 fit_columns_on_grid_load=True,
                                 reload_data=True,
-                                height=460,
+                                height=620,
                                 theme="balham-dark",
                                 custom_css=custom_css,
                                 key=f"tab1_aggrid_{selected_state}_{st.session_state.get(f'tab1_grid_refresh_{selected_state}', 0)}",
                             )
                             edited = pd.DataFrame(grid["data"])
                             st.session_state[draft_key] = edited
-                            selected_rows = grid.get("selected_rows", [])
-                            if isinstance(selected_rows, list) and selected_rows:
-                                selected_groups = [str(r.get("Channel Groups")) for r in selected_rows if r.get("Channel Groups") is not None]
                         else:
                             edited = st.data_editor(
                                 edited,
@@ -2368,7 +2385,6 @@ def main() -> None:
                                 key=f"tab1_apply_editor_{selected_state}",
                                 column_config={
                                     "Channel Groups": st.column_config.TextColumn("Channel Groups", disabled=True),
-                                    "Select": st.column_config.CheckboxColumn("Select"),
                                     "Bids": st.column_config.NumberColumn("Bids", format="localized", disabled=True),
                                     "SOV": st.column_config.NumberColumn("SOV", format="%.0f%%", disabled=True),
                                     "Clicks": st.column_config.NumberColumn("Clicks", format="localized", disabled=True),
@@ -2383,7 +2399,6 @@ def main() -> None:
                                     "Expected Additional Clicks": st.column_config.NumberColumn("Expected Additional Clicks", format="localized", disabled=True),
                                     "Expected Additional Binds": st.column_config.NumberColumn("Expected Additional Binds", format="%.2f", disabled=True),
                                     "CPC Lift %": st.column_config.NumberColumn("CPC Lift %", format="%.0f%%", disabled=True),
-                                    "Apply": st.column_config.CheckboxColumn("Apply"),
                                     "Selection Source": st.column_config.TextColumn("Selection Source", disabled=True),
                                     "Adj Options": None,
                                     "Adj Options JSON": None,
@@ -2391,9 +2406,6 @@ def main() -> None:
                                 },
                             )
                             st.session_state[draft_key] = edited
-                            selected_rows = edited[edited["Select"].map(to_bool)] if "Select" in edited.columns else pd.DataFrame()
-                            if not selected_rows.empty:
-                                selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
                         # Stage dropdown selections in rows (apply on Save).
                         for i, rr in edited.iterrows():
                             adj_map = {}
@@ -2408,8 +2420,7 @@ def main() -> None:
                                 edited.at[i, "Selected Price Adj"] = float(adj)
                                 if not close_adj(float(adj), rec_adj):
                                     edited.at[i, "Selection Source"] = "Manual adjustment"
-                                    edited.at[i, "Apply"] = True
-                                elif not to_bool(rr.get("Apply", False)):
+                                else:
                                     edited.at[i, "Selection Source"] = "Suggested"
 
                                 # Keep expected columns in sync with selected adjustment for preview.
@@ -2425,118 +2436,20 @@ def main() -> None:
                                     edited.at[i, "Expected Total Cost"] = as_float(best.get("Expected Total Cost"), as_float(rr.get("Expected Total Cost"), 0.0))
                                     edited.at[i, "Additional Budget Needed"] = as_float(best.get("Additional Budget Needed"), as_float(rr.get("Additional Budget Needed"), 0.0))
                         st.session_state[draft_key] = edited
-                        selected_rows = edited[edited["Select"].map(to_bool)] if "Select" in edited.columns else pd.DataFrame()
-                        if not selected_rows.empty:
-                            selected_groups = selected_rows["Channel Groups"].astype(str).tolist()
-
                         saving_key = f"tab1_is_saving_{selected_state}"
                         is_saving = bool(st.session_state.get(saving_key, False))
                         if is_saving:
                             st.info("Saving changes and recalculating. Please wait...")
 
-                        if (not use_aggrid_for_state_table) and len(selected_groups) == 1:
-                            sel_cg = str(selected_groups[0])
-                            row_mask = edited["Channel Groups"].astype(str) == sel_cg
-                            if row_mask.any():
-                                ridx = edited[row_mask].index[0]
-                                row_options = edited.at[ridx, "Adj Options"] if "Adj Options" in edited.columns else []
-                                if isinstance(row_options, list) and row_options:
-                                    cur_label = str(edited.at[ridx, "Adj Selection"])
-                                    try:
-                                        cur_idx = row_options.index(cur_label)
-                                    except Exception:
-                                        cur_idx = 0
-                                    r1, r2 = st.columns([3, 1])
-                                    picked_label = r1.selectbox(
-                                        f"Adjustment options for `{sel_cg}` in `{selected_state}`",
-                                        options=row_options,
-                                        index=cur_idx,
-                                        key=f"tab1_row_option_{selected_state}_{sel_cg}",
-                                        disabled=is_saving,
-                                    )
-                                    apply_row_option = r2.button(
-                                        "Apply Row Option",
-                                        key=f"tab1_apply_row_option_{selected_state}_{sel_cg}",
-                                        disabled=is_saving,
-                                    )
-                                    if apply_row_option:
-                                        edited.at[ridx, "Adj Selection"] = picked_label
-                                        adj_map = {}
-                                        try:
-                                            adj_map = json.loads(edited.at[ridx, "Adj Map JSON"] or "{}")
-                                        except Exception:
-                                            adj_map = {}
-                                        adj_val = as_float(adj_map.get(picked_label, parse_adj_from_label(picked_label)), np.nan)
-                                        rec_adj = as_float(edited.at[ridx, "Rec Bid Adj"], 0.0)
-                                        if pd.notna(adj_val):
-                                            edited.at[ridx, "Selected Price Adj"] = float(adj_val)
-                                            if not close_adj(float(adj_val), rec_adj):
-                                                edited.at[ridx, "Selection Source"] = "Manual adjustment"
-                                                edited.at[ridx, "Apply"] = True
-                                            else:
-                                                edited.at[ridx, "Selection Source"] = "Suggested"
-                                                edited.at[ridx, "Apply"] = False
-                                            ch_opts = popup_state_df[popup_state_df["Channel Groups"] == sel_cg] if not popup_state_df.empty else pd.DataFrame()
-                                            if not ch_opts.empty:
-                                                mm = ch_opts.copy()
-                                                mm["dist"] = (pd.to_numeric(mm["Bid Adj %"], errors="coerce").fillna(0.0) - float(adj_val)).abs()
-                                                best = mm.sort_values(["dist", "Bid Adj %"], ascending=[True, True]).iloc[0]
-                                                edited.at[ridx, "Expected Additional Clicks"] = as_float(best.get("Additional Clicks"), as_float(edited.at[ridx, "Expected Additional Clicks"], 0.0))
-                                                edited.at[ridx, "Expected Additional Binds"] = as_float(best.get("Additional Binds"), as_float(edited.at[ridx, "Expected Additional Binds"], 0.0))
-                                                edited.at[ridx, "CPC Lift %"] = as_float(best.get("CPC Uplift"), as_float(edited.at[ridx, "CPC Lift %"], 0.0))
-                                                edited.at[ridx, "Expected Total Cost"] = as_float(best.get("Expected Total Cost"), as_float(edited.at[ridx, "Expected Total Cost"], 0.0))
-                                                edited.at[ridx, "Additional Budget Needed"] = as_float(best.get("Additional Budget Needed"), as_float(edited.at[ridx, "Additional Budget Needed"], 0.0))
-                                        st.session_state[draft_key] = edited
-                                        st.rerun()
-
-                        a0, a1, a2, a3, a4, a5 = st.columns([1, 1.2, 1, 1, 1, 1.2])
-                        do_select_all = a0.button("Select All Rows", key=f"tab1_select_all_{selected_state}", disabled=is_saving)
-                        bulk_adj = a1.number_input(
-                            "Set selected to bid adj %",
-                            min_value=-10.0,
-                            max_value=60.0,
-                            value=10.0,
-                            step=5.0,
-                            key=f"tab1_bulk_adj_{selected_state}",
+                        a_save, a_reset = st.columns([1, 1])
+                        do_save = a_save.button("Save Edits", key=f"tab1_save_edits_{selected_state}", disabled=is_saving)
+                        do_reset_recommended = a_reset.button(
+                            "Reset To Recommended Bid",
+                            key=f"tab1_reset_rec_{selected_state}",
                             disabled=is_saving,
                         )
-                        do_apply_bulk = a2.button("Apply Selected", key=f"tab1_apply_selected_{selected_state}", disabled=is_saving)
-                        do_revert_bulk = a3.button("Revert Selected", key=f"tab1_revert_selected_{selected_state}", disabled=is_saving)
-                        do_save = a4.button("Save Edits", key=f"tab1_save_edits_{selected_state}", disabled=is_saving)
-                        do_revert_all = a5.button("Revert All To Rec", key=f"tab1_revert_all_{selected_state}", disabled=is_saving)
 
-                        if do_select_all:
-                            edited["Select"] = True
-                            st.session_state[draft_key] = edited
-                            st.info("Draft updated. Click `Save Edits` to apply.")
-
-                        if do_apply_bulk and selected_groups:
-                            for cg in selected_groups:
-                                m = edited["Channel Groups"] == cg
-                                edited.loc[m, "Selected Price Adj"] = float(bulk_adj)
-                                edited.loc[m, "Apply"] = True
-                                edited.loc[m, "Selection Source"] = "Manual adjustment"
-                            st.session_state[draft_key] = edited
-                            st.info("Draft updated. Click `Save Edits` to apply.")
-                        if do_revert_bulk and selected_groups:
-                            for cg in selected_groups:
-                                m = edited["Channel Groups"] == cg
-                                rec_adj = pd.to_numeric(edited.loc[m, "Rec Bid Adj"], errors="coerce").fillna(0.0)
-                                edited.loc[m, "Selected Price Adj"] = rec_adj.values
-                                if "Adj Selection" in edited.columns and "Adj Options" in edited.columns:
-                                    for idx in edited[m].index:
-                                        opts = edited.at[idx, "Adj Options"] if "Adj Options" in edited.columns else []
-                                        recv = float(pd.to_numeric(pd.Series([edited.at[idx, "Rec Bid Adj"]]), errors="coerce").fillna(0.0).iloc[0])
-                                        if isinstance(opts, list) and opts:
-                                            picked = next((lb for lb in opts if parse_adj_from_label(lb) == recv), opts[0])
-                                            edited.at[idx, "Adj Selection"] = picked
-                                edited.loc[m, "Apply"] = False
-                                edited.loc[m, "Selection Source"] = "Suggested"
-                            st.session_state[draft_key] = edited
-                            st.info("Draft updated. Click `Save Edits` to apply.")
-                        if do_revert_all:
-                            edited["Select"] = False
-                            edited["Apply"] = False
+                        if do_reset_recommended:
                             edited["Selection Source"] = "Suggested"
                             edited["Selected Price Adj"] = pd.to_numeric(edited["Rec Bid Adj"], errors="coerce").fillna(0.0)
                             if "Adj Selection" in edited.columns and "Adj Options" in edited.columns:
@@ -2567,7 +2480,7 @@ def main() -> None:
                                 prev_adj = as_float(prev.get("adj", rec_adj), rec_adj) if isinstance(prev, dict) else rec_adj
                                 selected_adj = as_float(rr.get("Selected Price Adj", rec_adj), rec_adj)
                                 req_adj = as_float(adj_from_dropdown, selected_adj)
-                                is_manual = (not close_adj(req_adj, rec_adj)) or to_bool(rr.get("Apply", False))
+                                is_manual = (not close_adj(req_adj, rec_adj))
                                 if is_manual:
                                     applied_adj, msg = nearest_available_adj(rr["Channel Groups"], req_adj, popup_state_df)
                                     new_overrides[okey] = {
@@ -2622,35 +2535,6 @@ def main() -> None:
                             st.markdown("**Save Audit (latest action)**")
                             render_formatted_table(audit_df, use_container_width=True)
                         st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
-
-        st.markdown("**State Strategy vs Actual Indicator**")
-        indicator_view = map_df[[
-            "State", "Strategy Bucket", "Conflict Arrow", "Conflict Level", "Performance Tone",
-            "ROE Performance Group", "Performance Stat Sig",
-            "ROE", "Combined Ratio", "Performance", "Binds", "Quotes to Binds", "CPB", "Avg. MRLTV"
-        ]].sort_values(["Conflict Level", "State"])
-        indicator_view["Indicator"] = np.where(
-            indicator_view["Performance Tone"] == "Good",
-            "🟢",
-            np.where(indicator_view["Performance Tone"] == "Poor", "🔴", "🟡"),
-        )
-        indicator_view["Match"] = indicator_view["Indicator"] + " " + indicator_view["Conflict Arrow"] + " " + indicator_view["Conflict Level"]
-        indicator_view["Q2B"] = indicator_view["Quotes to Binds"]
-        render_formatted_table(
-            indicator_view[["State", "Strategy Bucket", "ROE Performance Group", "Performance Stat Sig", "Match", "ROE", "Combined Ratio", "Performance", "Binds", "Q2B", "CPB", "Avg. MRLTV"]],
-            use_container_width=True,
-        )
-        st.markdown("**ROE-Based State Performance Layer**")
-        state_perf_layer = (
-            map_df.groupby(["ROE Performance Group", "Performance Stat Sig"], as_index=False)
-            .agg(
-                States=("State", lambda x: ", ".join(sorted(set(x)))),
-                Rows=("State", "count"),
-                Binds=("Binds", "sum"),
-            )
-            .sort_values(["Performance Stat Sig", "Rows"], ascending=[False, False])
-        )
-        render_formatted_table(state_perf_layer, use_container_width=True)
 
     with tabs[2]:
         st.subheader("📊 Channel Group Analysis")
