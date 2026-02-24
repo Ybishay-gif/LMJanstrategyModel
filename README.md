@@ -32,6 +32,19 @@ pip install -r requirements.txt
 streamlit run src/app.py
 ```
 
+## Pre-Deployment Smoke Test
+
+Run this before every push/deployment:
+
+```bash
+.venv/bin/python scripts/deploy_smoke_test.py
+```
+
+What it verifies:
+- Data/model build succeeds with default settings and repo data files
+- Manual bid override recalculates downstream metrics for the selected state+channel row
+- Row option mapping contains the row's current recommended adjustment (prevents mass false-manual saves)
+
 ## Current scoring logic
 - `Growth Score` favors click lift + win-rate lift and penalizes CPC lift.
 - Best channel-group adjustment is selected under a max CPC increase constraint.

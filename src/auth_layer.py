@@ -103,6 +103,51 @@ def make_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _session_signing_key() -> bytes:
+    raw = (
+        os.getenv("APP_SESSION_SIGNING_KEY", "").strip()
+        or os.getenv("APP_BASE_URL", "").strip()
+        or "insurance-growth-navigator-session-key"
+    )
+    return raw.encode("utf-8")
+
+
+def make_stateless_session_token(email: str) -> str:
+    exp = int((datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).timestamp())
+    payload = {"e": normalize_email(email), "x": exp}
+    payload_raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload_raw).decode("utf-8").rstrip("=")
+    sig = hmac.new(_session_signing_key(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
+    return f"v2.{payload_b64}.{sig_b64}"
+
+
+def resolve_stateless_session_token(token: str) -> Optional[str]:
+    t = str(token or "").strip()
+    if not t.startswith("v2."):
+        return None
+    try:
+        _, payload_b64, sig_b64 = t.split(".", 2)
+        expected_sig = hmac.new(_session_signing_key(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+        actual_sig = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
+        if not hmac.compare_digest(expected_sig, actual_sig):
+            return None
+        payload_raw = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
+        payload = json.loads(payload_raw.decode("utf-8"))
+        email = normalize_email(payload.get("e", ""))
+        exp = int(payload.get("x", 0))
+        if not email or "@" not in email:
+            return None
+        if exp <= int(datetime.now(timezone.utc).timestamp()):
+            return None
+        allowed = load_allowed_emails()
+        if email not in allowed:
+            return None
+        return email
+    except Exception:
+        return None
+
+
 def build_invite_link(token: str) -> str:
     base_url = str(os.getenv("APP_BASE_URL", "")).strip().rstrip("/")
     if not base_url:
@@ -125,6 +170,9 @@ def resolve_session_token(users: dict, token: str) -> Optional[str]:
     t = str(token or "").strip()
     if not t:
         return None
+    stateless = resolve_stateless_session_token(t)
+    if stateless:
+        return stateless
     now = datetime.now(timezone.utc)
     for email, rec in users.items():
         if not isinstance(rec, dict):
@@ -303,7 +351,7 @@ def render_auth_gate() -> bool:
             if not ok2:
                 st.error(err2)
                 return False
-            st.query_params["session_token"] = sess
+            st.query_params["session_token"] = make_stateless_session_token(staged_email)
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.session_state["auth_stage"] = "password"
@@ -348,7 +396,7 @@ def render_auth_gate() -> bool:
             if not ok3:
                 st.error(err3)
                 return False
-            st.query_params["session_token"] = sess
+            st.query_params["session_token"] = make_stateless_session_token(staged_email)
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.rerun()
@@ -515,4 +563,3 @@ def render_top_icons(is_admin: bool, settings_view: bool = False) -> None:
         ),
         unsafe_allow_html=True,
     )
-

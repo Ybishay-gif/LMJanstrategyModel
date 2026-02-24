@@ -2285,8 +2285,8 @@ def main() -> None:
                         if isinstance(prev, pd.DataFrame) and "Channel Groups" in prev.columns:
                             if set(prev["Channel Groups"].astype(str)) == set(edited["Channel Groups"].astype(str)):
                                 edited = prev.copy()
-                        # Reliability-first mode: use Streamlit data_editor for deterministic edit/save behavior.
-                        use_aggrid_for_state_table = False
+                        # Use AG Grid for true row-level dropdown options in-table.
+                        use_aggrid_for_state_table = AGGRID_AVAILABLE
                         if AGGRID_AVAILABLE and use_aggrid_for_state_table:
                             gb = GridOptionsBuilder.from_dataframe(edited)
                             gb.configure_default_column(resizable=True, sortable=True, filter=True)
@@ -2434,7 +2434,7 @@ def main() -> None:
                         if is_saving:
                             st.info("Saving changes and recalculating. Please wait...")
 
-                        if len(selected_groups) == 1:
+                        if (not use_aggrid_for_state_table) and len(selected_groups) == 1:
                             sel_cg = str(selected_groups[0])
                             row_mask = edited["Channel Groups"].astype(str) == sel_cg
                             if row_mask.any():
