@@ -36,6 +36,7 @@ OVERRIDES_PATH = Path("data/manual_overrides.json")
 AUTH_USERS_PATH = Path("data/auth_users.json")
 AUTH_ALLOWLIST_PATH = Path("data/allowed_emails.txt")
 ADMIN_EMAIL = "ybishay@kissterra.com"
+SESSION_TTL_DAYS = 7
 
 STRATEGY_SCALE = {
     "Strongest Momentum": 1.00,
@@ -1471,12 +1472,48 @@ def make_invite_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+def make_session_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
 def build_invite_link(token: str) -> str:
     base_url = str(os.getenv("APP_BASE_URL", "")).strip().rstrip("/")
     if not base_url:
         return f"?invite_token={token}"
     sep = "&" if "?" in base_url else "?"
     return f"{base_url}{sep}invite_token={token}"
+
+
+def issue_session(users: dict, email: str) -> tuple[dict, str]:
+    e = normalize_email(email)
+    rec = users.get(e, {}) if isinstance(users.get(e), dict) else {}
+    token = make_session_token()
+    rec["session_token"] = token
+    rec["session_expires_at"] = (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
+    users[e] = rec
+    return users, token
+
+
+def resolve_session_token(users: dict, token: str) -> Optional[str]:
+    t = str(token or "").strip()
+    if not t:
+        return None
+    now = datetime.now(timezone.utc)
+    for email, rec in users.items():
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("session_token", "")) != t:
+            continue
+        if not bool(rec.get("active", True)):
+            return None
+        try:
+            exp = datetime.fromisoformat(str(rec.get("session_expires_at", "")))
+        except Exception:
+            return None
+        if exp < now:
+            return None
+        return normalize_email(email)
+    return None
 
 
 def send_invite_email(email: str, link: str) -> tuple[bool, str]:
@@ -1537,13 +1574,35 @@ def render_auth_gate() -> bool:
 
     allowed = load_allowed_emails()
     users = load_auth_users()
+    qp_session = st.query_params.get("session_token")
+    if isinstance(qp_session, list):
+        qp_session = qp_session[0] if qp_session else ""
+    remembered_email = resolve_session_token(users, str(qp_session or ""))
+    if remembered_email:
+        st.session_state["auth_ok"] = True
+        st.session_state["auth_user"] = remembered_email
+        st.session_state["auth_email"] = remembered_email
+        st.session_state["auth_stage"] = "password"
+        return True
+
     qp_token = st.query_params.get("invite_token")
     if isinstance(qp_token, list):
         qp_token = qp_token[0] if qp_token else ""
     invited_email = resolve_invite_token(users, str(qp_token or ""))
     if invited_email:
-        st.session_state["auth_email"] = invited_email
-        st.session_state["auth_stage"] = "create"
+        rec = users.get(invited_email, {}) if isinstance(users.get(invited_email), dict) else {}
+        if rec.get("password_hash"):
+            st.session_state["auth_email"] = invited_email
+            st.session_state["auth_stage"] = "password"
+            if "invite_token" in st.query_params:
+                del st.query_params["invite_token"]
+        else:
+            st.session_state["auth_email"] = invited_email
+            st.session_state["auth_stage"] = "create"
+    elif qp_token:
+        # Invalid/expired invite token should not trap user in signup flow.
+        if "invite_token" in st.query_params:
+            del st.query_params["invite_token"]
 
     st.title("🔐 Secure Login")
     if not allowed:
@@ -1612,6 +1671,12 @@ def render_auth_gate() -> bool:
             if not ok:
                 st.error(err)
                 return False
+            users, sess = issue_session(users, staged_email)
+            ok2, err2 = save_auth_users(users)
+            if not ok2:
+                st.error(err2)
+                return False
+            st.query_params["session_token"] = sess
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.session_state["auth_stage"] = "password"
@@ -1651,7 +1716,12 @@ def render_auth_gate() -> bool:
                 return False
             rec["last_login_at"] = now_iso()
             users[staged_email] = rec
-            save_auth_users(users)
+            users, sess = issue_session(users, staged_email)
+            ok3, err3 = save_auth_users(users)
+            if not ok3:
+                st.error(err3)
+                return False
+            st.query_params["session_token"] = sess
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.rerun()
@@ -2140,11 +2210,20 @@ def main() -> None:
         else:
             s1.markdown("&nbsp;")
         if s2.button("🚪 Logout", key="auth_logout_btn", use_container_width=True):
+            u = normalize_email(st.session_state.get("auth_user", ""))
+            users = load_auth_users()
+            rec = users.get(u, {}) if isinstance(users.get(u), dict) else {}
+            rec["session_token"] = ""
+            rec["session_expires_at"] = ""
+            users[u] = rec
+            save_auth_users(users)
             st.session_state["auth_ok"] = False
             st.session_state["auth_user"] = ""
             st.session_state["auth_stage"] = "email"
             st.session_state["auth_email"] = ""
             st.session_state["show_settings"] = False
+            if "session_token" in st.query_params:
+                del st.query_params["session_token"]
             st.rerun()
         st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
         st.divider()
