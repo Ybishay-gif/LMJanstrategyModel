@@ -51,6 +51,7 @@ def settings_for_mode(mode: str) -> Settings:
 
 def build_for_mode(mode: str) -> pd.DataFrame:
     p = DEFAULT_PATHS
+    profiles = app.normalize_strategy_profiles(app.load_strategy_profiles())
     mt = (
         app.file_mtime(p["state_strategy"]),
         app.file_mtime(p["state_data"]),
@@ -58,6 +59,8 @@ def build_for_mode(mode: str) -> pd.DataFrame:
         app.file_mtime(p["channel_group"]),
         app.file_mtime(p["channel_price_exp"]),
         app.file_mtime(p["channel_state"]),
+        app.file_mtime("data/state_strategy_overrides.json"),
+        app.file_mtime("data/strategy_profiles.json"),
     )
     rec_df, *_ = app.build_all_from_paths(
         p["state_strategy"],
@@ -67,6 +70,7 @@ def build_for_mode(mode: str) -> pd.DataFrame:
         p["channel_price_exp"],
         p["channel_state"],
         settings_for_mode(mode),
+        profiles,
         mt,
     )
     return rec_df
@@ -128,4 +132,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

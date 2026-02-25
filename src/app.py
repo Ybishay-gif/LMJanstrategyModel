@@ -80,14 +80,91 @@ from storage_layer import (
     load_analytics_presets,
     save_analytics_presets,
     STATE_STRATEGY_OVERRIDES_PATH,
+    STRATEGY_PROFILES_PATH,
     load_state_strategy_overrides,
     save_state_strategy_overrides,
+    load_strategy_profiles,
+    save_strategy_profiles,
 )
 from analytics_builders import (
     build_price_exploration_master_detail,
     build_price_exploration_detail_lookup,
     build_general_analytics_df,
 )
+
+
+DEFAULT_STRATEGY_PROFILES = {
+    "Strongest Momentum": {
+        "growth_vs_cost": 1.00,
+        "max_cpc_increase_pct": 45,
+        "max_perf_drop": 0.18,
+        "min_new_performance": 0.72,
+    },
+    "Moderate Momentum": {
+        "growth_vs_cost": 0.75,
+        "max_cpc_increase_pct": 35,
+        "max_perf_drop": 0.16,
+        "min_new_performance": 0.76,
+    },
+    "Minimal Growth": {
+        "growth_vs_cost": 0.50,
+        "max_cpc_increase_pct": 25,
+        "max_perf_drop": 0.12,
+        "min_new_performance": 0.80,
+    },
+    "LTV Constrained": {
+        "growth_vs_cost": 0.25,
+        "max_cpc_increase_pct": 20,
+        "max_perf_drop": 0.10,
+        "min_new_performance": 0.88,
+    },
+    "Closure Constrained": {
+        "growth_vs_cost": 0.20,
+        "max_cpc_increase_pct": 18,
+        "max_perf_drop": 0.10,
+        "min_new_performance": 0.90,
+    },
+    "Inactive/Low Spend": {
+        "growth_vs_cost": 0.15,
+        "max_cpc_increase_pct": 12,
+        "max_perf_drop": 0.08,
+        "min_new_performance": 0.92,
+    },
+}
+
+
+def strategy_profile_mode(growth_vs_cost: float) -> str:
+    x = float(np.clip(growth_vs_cost, 0.0, 1.0))
+    if x >= 0.90:
+        return "Max Growth"
+    if x >= 0.70:
+        return "Growth Leaning"
+    if x >= 0.45:
+        return "Balanced"
+    if x >= 0.20:
+        return "Cost Leaning"
+    return "Optimize Cost"
+
+
+def normalize_strategy_profiles(raw: dict) -> dict:
+    out = {}
+    src = raw if isinstance(raw, dict) else {}
+    keys = sorted(set(DEFAULT_STRATEGY_PROFILES.keys()) | set(str(k) for k in src.keys()))
+    for k in keys:
+        base = dict(DEFAULT_STRATEGY_PROFILES.get(k, {
+            "growth_vs_cost": 0.50,
+            "max_cpc_increase_pct": 25,
+            "max_perf_drop": 0.15,
+            "min_new_performance": 0.80,
+        }))
+        rv = src.get(k, {})
+        if isinstance(rv, dict):
+            base["growth_vs_cost"] = float(np.clip(as_float(rv.get("growth_vs_cost"), base["growth_vs_cost"]), 0.0, 1.0))
+            base["max_cpc_increase_pct"] = float(np.clip(as_float(rv.get("max_cpc_increase_pct"), base["max_cpc_increase_pct"]), 0.0, 45.0))
+            base["max_perf_drop"] = float(np.clip(as_float(rv.get("max_perf_drop"), base["max_perf_drop"]), 0.0, 0.60))
+            base["min_new_performance"] = float(np.clip(as_float(rv.get("min_new_performance"), base["min_new_performance"]), 0.20, 1.50))
+        out[str(k)] = base
+    return out
 
 
 @st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
@@ -99,6 +176,7 @@ def build_all_from_paths(
     price_path: str,
     channel_state_path: str,
     settings: Settings,
+    strategy_profiles: dict,
     mtime_signature: tuple[float, ...],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     # mtime_signature is only for cache invalidation when files change.
@@ -116,7 +194,7 @@ def build_all_from_paths(
     channel_state_df = prepare_channel_state(channel_state_raw)
     price_eval, best_adj = prepare_price_exploration(price_raw, settings)
     rec_df, state_extra_df, state_seg_extra_df, channel_summary_df = build_model_tables(
-        state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
+        state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings, strategy_profiles
     )
     return rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df
 
@@ -187,12 +265,17 @@ def _build_effect_dicts(price_eval_df: pd.DataFrame, settings: Settings) -> tupl
     return state_dict, channel_dict
 
 
-def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+def _assign_best_price_points(
+    rec: pd.DataFrame,
+    price_eval_df: pd.DataFrame,
+    settings: Settings,
+    strategy_profiles: Optional[dict] = None,
+) -> pd.DataFrame:
     px = price_eval_df.copy()
     if "Stat Sig Price Point" in px.columns:
         px = px[px["Stat Sig Price Point"] == True]
     if "CPC Lift %" in px.columns:
-        px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
+        px = px[px["CPC Lift %"].notna()]
 
     state_curves: dict[tuple[str, str], pd.DataFrame] = {}
     if "State" in px.columns:
@@ -202,16 +285,24 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         }
     ch_curves = {str(ch): g.sort_values("Price Adjustment Percent") for ch, g in px.groupby("Channel Groups")}
 
+    strategy_profiles = normalize_strategy_profiles(strategy_profiles or {})
+
     def _pick_from_curve(curve: pd.DataFrame, row: pd.Series) -> Optional[pd.Series]:
         if curve is None or curve.empty:
             return None
         curve = curve.copy()
         bucket = str(row.get("Strategy Bucket", "") or "")
+        prof = strategy_profiles.get(bucket, DEFAULT_STRATEGY_PROFILES.get(bucket, DEFAULT_STRATEGY_PROFILES["Minimal Growth"]))
+        row_mode = strategy_profile_mode(prof.get("growth_vs_cost", 0.5))
+        row_cpc_cap = float(prof.get("max_cpc_increase_pct", effective_cpc_cap_pct(settings))) / 100.0
+        row_max_perf_drop = float(prof.get("max_perf_drop", settings.max_perf_drop))
+        row_min_new_perf = float(prof.get("min_new_performance", settings.min_new_performance))
         min_adj = strategy_min_adjustment(bucket, settings)
         max_adj = strategy_max_adjustment(bucket, settings)
         curve = curve[
             (pd.to_numeric(curve["Price Adjustment Percent"], errors="coerce").fillna(0.0) >= min_adj)
             & (pd.to_numeric(curve["Price Adjustment Percent"], errors="coerce").fillna(0.0) <= max_adj)
+            & (pd.to_numeric(curve["CPC Lift %"], errors="coerce").fillna(0.0) <= row_cpc_cap)
         ]
         if curve.empty:
             return None
@@ -241,7 +332,7 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         if pd.notna(target_cpb) and target_cpb > 0 and pd.notna(actual_cpb) and actual_cpb > 0:
             actual_perf = target_cpb / actual_cpb
 
-        f = mode_factor(settings.optimization_mode)
+        f = mode_factor(row_mode)
         # Strategy-tuned tradeoff: momentum states bias to growth; constrained states bias to CPC/perf.
         wr_w = 1.0 + 0.8 * f
         cpc_w = 0.55 + 1.20 * (1 - f)
@@ -280,7 +371,7 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
                 perf_gain = new_perf - actual_perf
             perf_ok = True
             if pd.notna(new_perf):
-                perf_ok = (new_perf >= settings.min_new_performance) and (perf_drop <= settings.max_perf_drop)
+                perf_ok = (new_perf >= row_min_new_perf) and (perf_drop <= row_max_perf_drop)
             adj = float(c.get("Price Adjustment Percent", 0) or 0)
             utility = (
                 wr_w * wr_lift
@@ -314,7 +405,7 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         valid = [x for x in scored if x["perf_ok"]]
         pool = valid if valid else scored
         if pool:
-            mode = str(settings.optimization_mode or "Balanced")
+            mode = str(row_mode or "Balanced")
             if mode == "Max Growth":
                 best = sorted(
                     pool,
@@ -384,6 +475,22 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         if srow is not None and crow is not None:
             s_adj = float(srow.get("Price Adjustment Percent", 0.0) or 0.0)
             c_adj = float(crow.get("Price Adjustment Percent", 0.0) or 0.0)
+            s_wr = as_float(srow.get("Win Rate Lift %", 0.0), 0.0)
+            c_wr = as_float(crow.get("Win Rate Lift %", 0.0), 0.0)
+            s_cpc = as_float(srow.get("CPC Lift %", 0.0), 0.0)
+            c_cpc = as_float(crow.get("CPC Lift %", 0.0), 0.0)
+            mode = str(settings.optimization_mode or "Balanced")
+
+            # Growth-first state-vs-fallback resolver:
+            # prefer higher win-rate uplift unless CPC becomes materially worse.
+            if mode in {"Max Growth", "Growth Leaning", "Balanced"}:
+                wr_gain = c_wr - s_wr
+                cpc_delta = c_cpc - s_cpc
+                if (wr_gain > 0 and cpc_delta <= 0.10) or (wr_gain >= 0.02):
+                    srow = crow
+                elif abs(wr_gain) <= 0.01 and cpc_delta < -0.05:
+                    srow = crow
+
             # If state-level has only baseline while channel-level has a valid non-zero
             # point, prefer the channel fallback in growth/balanced modes.
             if abs(s_adj) <= 1e-9 and abs(c_adj) > 1e-9 and mode_factor(settings.optimization_mode) >= 0.5:
@@ -723,6 +830,7 @@ def build_model_tables(
     best_adj_df: pd.DataFrame,
     price_eval_df: pd.DataFrame,
     settings: Settings,
+    strategy_profiles: Optional[dict] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     st_ref = state_df[[
         "State", "Strategy Bucket", "Strategy Scale", "Profitability Score", "Performance", "ROE", "Combined Ratio", "Avg. MRLTV"
@@ -751,7 +859,7 @@ def build_model_tables(
 
     rec = channel_state_df.merge(st_ref, on="State", how="left").merge(seg_ref, on=["State", "Segment"], how="left")
     rec = rec.merge(best_adj_df, on="Channel Groups", how="left")
-    rec = _assign_best_price_points(rec, price_eval_df, settings)
+    rec = _assign_best_price_points(rec, price_eval_df, settings, strategy_profiles)
     rec["Has Sig Price Evidence"] = rec["Has Sig Price Evidence"].fillna(False)
 
     rec["Use Seg Perf"] = rec["Bids"] >= settings.min_bids_channel_state
@@ -1016,10 +1124,6 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     p = p[p["Channel Groups"] == channel_group].copy()
     if p.empty:
         return pd.DataFrame(), "None"
-    min_adj = -30.0 if mode_factor(settings.optimization_mode) <= 0.5 else 0.0
-    p = p[p["Price Adjustment Percent"].fillna(0) >= min_adj].copy()
-    p = p[p["Stat Sig Price Point"] == True].copy()
-    p = p[p["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0].copy()
     if p.empty:
         return pd.DataFrame(), "None"
 
@@ -1033,6 +1137,7 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
                 Clicks=("Clicks", "sum"),
                 **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
                 **{"CPC Lift %": ("CPC Lift %", "mean")},
+                **{"Stat Sig Price Point": ("Stat Sig Price Point", "max")},
             )
             .sort_values("Price Adjustment Percent")
         )
@@ -1055,10 +1160,21 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
         p["Clicks"] = np.nan
 
     sig_vals = p.apply(lambda r: stat_sig_level(r.get("Bids", 0), r.get("Clicks", 0), settings), axis=1)
-    p["Sig Level"] = sig_vals.map(lambda x: x[0])
-    p["Sig Icon"] = sig_vals.map(lambda x: x[1])
     p["Sig Score"] = sig_vals.map(lambda x: x[2])
-    p = p[p["Sig Level"] != "Weak"].copy()
+    p["Recommend Eligible"] = p.get("Stat Sig Price Point", False).fillna(False).astype(bool)
+    p["Sig Level"] = np.where(
+        p["Recommend Eligible"],
+        sig_vals.map(lambda x: x[0]),
+        np.where(
+            (pd.to_numeric(p.get("Bids", 0), errors="coerce").fillna(0) > 0)
+            | (pd.to_numeric(p.get("Clicks", 0), errors="coerce").fillna(0) > 0),
+            "Poor",
+            "No Sig",
+        ),
+    )
+    p["Sig Icon"] = p["Sig Level"].map(
+        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
+    ).fillna("⚪")
     if "Source Used" not in p.columns:
         p["Source Used"] = src
     p = p.sort_values("Price Adjustment Percent")
@@ -1088,8 +1204,8 @@ def build_popup_card_options(
     out_rows = []
     allow_negative_moves = mode_factor(settings.optimization_mode) <= 0.5
     for _, cr in candidates.sort_values("Price Adjustment Percent").iterrows():
-        wr_l = float(cr.get("Win Rate Lift %", 0) or 0)
-        cpc_l = float(cr.get("CPC Lift %", 0) or 0)
+        wr_l = as_float(cr.get("Win Rate Lift %", 0), 0.0)
+        cpc_l = as_float(cr.get("CPC Lift %", 0), 0.0)
         wr_effect = wr_l if allow_negative_moves else max(wr_l, 0)
         add_clicks = float((rsel["Bids"].fillna(0) * base_wr * wr_effect).sum())
         add_binds = float((rsel["Bids"].fillna(0) * base_wr * wr_effect * c2b).sum())
@@ -1724,6 +1840,7 @@ def main() -> None:
 
     # Auto-run on first load; Refresh is optional for manual reruns.
     _ = run
+    strategy_profiles = normalize_strategy_profiles(load_strategy_profiles())
 
     try:
         base_strategy_df = pd.DataFrame(columns=["State", "Strategy Bucket"])
@@ -1743,6 +1860,7 @@ def main() -> None:
                 file_mtime(price_path),
                 file_mtime(channel_state_path),
                 file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
+                file_mtime(str(STRATEGY_PROFILES_PATH)),
             )
             rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
                 strategy_path,
@@ -1752,6 +1870,7 @@ def main() -> None:
                 price_path,
                 channel_state_path,
                 settings,
+                strategy_profiles,
                 mtimes,
             )
         elif data_mode == "Upload files (Cloud)":
@@ -1777,7 +1896,7 @@ def main() -> None:
             channel_state_df = prepare_channel_state(channel_state_raw)
             price_eval, best_adj = prepare_price_exploration(price_raw, settings)
             rec_df, state_extra_df, state_seg_extra_df, _ = build_model_tables(
-                state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
+                state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings, strategy_profiles
             )
         else:
             base_strategy_df = read_state_strategy(strategy_path)
@@ -1789,6 +1908,7 @@ def main() -> None:
                 file_mtime(price_path),
                 file_mtime(channel_state_path),
                 file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
+                file_mtime(str(STRATEGY_PROFILES_PATH)),
             )
             rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
                 strategy_path,
@@ -1798,6 +1918,7 @@ def main() -> None:
                 price_path,
                 channel_state_path,
                 settings,
+                strategy_profiles,
                 mtimes,
             )
     except Exception as exc:
@@ -1821,6 +1942,7 @@ def main() -> None:
 
     tab_labels = [
         "🏁 Tab 0: Executive State View",
+        "⚙️ Plan Settings",
         "🗺️ Tab 1: State Momentum Map",
         "📊 Tab 2: Channel Group Analysis",
         "🧠 Tab 3: Channel Group and States",
@@ -1877,18 +1999,12 @@ def main() -> None:
         add_binds = float(pd.to_numeric(sim_all["Expected Additional Binds"], errors="coerce").fillna(0).sum())
         add_budget = float(pd.to_numeric(sim_all["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
 
-        if "tab0_strategy_editor_open" not in st.session_state:
-            st.session_state["tab0_strategy_editor_open"] = False
+        plan_settings_tab = "⚙️ Plan Settings"
         h1, h2 = st.columns([0.95, 0.05])
         h1.markdown("### Product Strategy Analysis")
-        if not st.session_state["tab0_strategy_editor_open"]:
-            if h2.button("✏️", key="tab0_open_editor_icon", help="Edit product strategy"):
-                st.session_state["tab0_strategy_editor_open"] = True
-                st.rerun()
-        else:
-            if h2.button("▾", key="tab0_collapse_editor_icon", help="Collapse editor"):
-                st.session_state["tab0_strategy_editor_open"] = False
-                st.rerun()
+        if h2.button("✏️", key="tab0_open_editor_icon", help="Open Plan Settings"):
+            st.session_state["main_view_tab"] = plan_settings_tab
+            st.rerun()
 
         render_kpi_tiles(
             [
@@ -1907,90 +2023,6 @@ def main() -> None:
             ],
             cols=4,
         )
-
-        base_map = (
-            base_strategy_df[["State", "Strategy Bucket"]]
-            .dropna()
-            .assign(State=lambda d: d["State"].astype(str).str.upper())
-            .drop_duplicates("State")
-            .set_index("State")["Strategy Bucket"]
-            .to_dict()
-            if isinstance(base_strategy_df, pd.DataFrame) and not base_strategy_df.empty
-            else {}
-        )
-        current_map = (
-            state_df[["State", "Strategy Bucket"]]
-            .dropna()
-            .assign(State=lambda d: d["State"].astype(str).str.upper())
-            .drop_duplicates("State")
-            .set_index("State")["Strategy Bucket"]
-            .to_dict()
-        )
-        states_sorted = sorted(current_map.keys())
-        strategy_options = list(STRATEGY_SCALE.keys())
-        editor_src = pd.DataFrame(
-            {
-                "State": states_sorted,
-                "Current Strategy": [current_map.get(s, "") for s in states_sorted],
-                "New Strategy": [current_map.get(s, "") for s in states_sorted],
-            }
-        )
-        if (
-            "tab0_strategy_editor_df" not in st.session_state
-            or st.session_state.get("tab0_strategy_editor_states") != tuple(states_sorted)
-        ):
-            st.session_state["tab0_strategy_editor_df"] = editor_src.copy()
-            st.session_state["tab0_strategy_editor_states"] = tuple(states_sorted)
-
-        if st.session_state["tab0_strategy_editor_open"]:
-            st.markdown("**Product Strategy Editor**")
-            with st.form("tab0_strategy_editor_form", clear_on_submit=False):
-                edited_strategy_df = st.data_editor(
-                    st.session_state["tab0_strategy_editor_df"][["State", "Current Strategy", "New Strategy"]],
-                    use_container_width=True,
-                    hide_index=True,
-                    key="tab0_strategy_editor",
-                    column_config={
-                        "State": st.column_config.TextColumn("State", disabled=True),
-                        "Current Strategy": st.column_config.TextColumn("Current Strategy", disabled=True),
-                        "New Strategy": st.column_config.SelectboxColumn(
-                            "New Strategy",
-                            options=strategy_options,
-                            required=True,
-                        ),
-                    },
-                    disabled=["State", "Current Strategy"],
-                )
-                c_save, c_spacer, c_collapse = st.columns([0.2, 0.6, 0.2])
-                save_strategy = c_save.form_submit_button("Save", type="primary")
-                collapse_strategy = c_collapse.form_submit_button("Collapse")
-
-            st.session_state["tab0_strategy_editor_df"] = edited_strategy_df.copy()
-            if collapse_strategy:
-                st.session_state["tab0_strategy_editor_open"] = False
-                st.rerun()
-            if save_strategy:
-                with st.spinner("Saving strategy and recalculating..."):
-                    prev_overrides = dict(load_state_strategy_overrides())
-                    next_overrides = dict(prev_overrides)
-                    for _, rr in edited_strategy_df.iterrows():
-                        st_code = str(rr.get("State", "")).strip().upper()
-                        sel = str(rr.get("New Strategy", "")).strip()
-                        base = str(base_map.get(st_code, current_map.get(st_code, ""))).strip()
-                        if not st_code or not sel:
-                            continue
-                        if sel == base:
-                            next_overrides.pop(st_code, None)
-                        else:
-                            next_overrides[st_code] = sel
-                    ok_so, err_so = save_state_strategy_overrides(next_overrides)
-                    if ok_so:
-                        st.session_state["tab0_strategy_editor_open"] = False
-                        st.success("Saved.")
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error(err_so)
 
         map_mode0 = st.radio(
             "Map color mode",
@@ -2121,6 +2153,176 @@ def main() -> None:
         render_formatted_table(state_perf_layer, use_container_width=True)
 
     elif selected_tab == tab_labels[1]:
+        st.markdown("### Plan Settings")
+        st.caption("Manage product strategy assignment and recommendation policy by strategy. Changes apply after Save.")
+
+        base_map = (
+            base_strategy_df[["State", "Strategy Bucket"]]
+            .dropna()
+            .assign(State=lambda d: d["State"].astype(str).str.upper())
+            .drop_duplicates("State")
+            .set_index("State")["Strategy Bucket"]
+            .to_dict()
+            if isinstance(base_strategy_df, pd.DataFrame) and not base_strategy_df.empty
+            else {}
+        )
+        current_map = (
+            state_df[["State", "Strategy Bucket"]]
+            .dropna()
+            .assign(State=lambda d: d["State"].astype(str).str.upper())
+            .drop_duplicates("State")
+            .set_index("State")["Strategy Bucket"]
+            .to_dict()
+        )
+        states_sorted = sorted(current_map.keys())
+        strategy_names = sorted(set(list(STRATEGY_SCALE.keys()) + list(strategy_profiles.keys()) + list(current_map.values())))
+
+        st.markdown("**1. State Strategy**")
+        editor_src = pd.DataFrame(
+            {
+                "State": states_sorted,
+                "Current Strategy": [current_map.get(s, "") for s in states_sorted],
+                "New Strategy": [current_map.get(s, "") for s in states_sorted],
+            }
+        )
+        if (
+            "plan_strategy_editor_df" not in st.session_state
+            or st.session_state.get("plan_strategy_editor_states") != tuple(states_sorted)
+        ):
+            st.session_state["plan_strategy_editor_df"] = editor_src.copy()
+            st.session_state["plan_strategy_editor_states"] = tuple(states_sorted)
+        with st.form("plan_state_strategy_form", clear_on_submit=False):
+            edited_strategy_df = st.data_editor(
+                st.session_state["plan_strategy_editor_df"][["State", "Current Strategy", "New Strategy"]],
+                use_container_width=True,
+                hide_index=True,
+                key="plan_state_strategy_editor",
+                column_config={
+                    "State": st.column_config.TextColumn("State", disabled=True),
+                    "Current Strategy": st.column_config.TextColumn("Current Strategy", disabled=True),
+                    "New Strategy": st.column_config.SelectboxColumn(
+                        "New Strategy",
+                        options=strategy_names,
+                        required=True,
+                    ),
+                },
+                disabled=["State", "Current Strategy"],
+            )
+            save_strategy = st.form_submit_button("Save State Strategy", type="primary")
+        st.session_state["plan_strategy_editor_df"] = edited_strategy_df.copy()
+        if save_strategy:
+            with st.spinner("Saving state strategy..."):
+                prev_overrides = dict(load_state_strategy_overrides())
+                next_overrides = dict(prev_overrides)
+                for _, rr in edited_strategy_df.iterrows():
+                    st_code = str(rr.get("State", "")).strip().upper()
+                    sel = str(rr.get("New Strategy", "")).strip()
+                    base = str(base_map.get(st_code, current_map.get(st_code, ""))).strip()
+                    if not st_code or not sel:
+                        continue
+                    if sel == base:
+                        next_overrides.pop(st_code, None)
+                    else:
+                        next_overrides[st_code] = sel
+                ok_so, err_so = save_state_strategy_overrides(next_overrides)
+                if ok_so:
+                    st.success("State strategy saved.")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(err_so)
+
+        st.markdown("**2. Strategy Settings**")
+        profile_rows = []
+        normalized_profiles = normalize_strategy_profiles(strategy_profiles)
+        for sname in strategy_names:
+            p = normalized_profiles.get(sname, normalize_strategy_profiles({sname: {}}).get(sname, {}))
+            profile_rows.append(
+                {
+                    "Strategy": sname,
+                    "Growth vs Cost (0-100)": int(round(100.0 * float(p.get("growth_vs_cost", 0.5)))),
+                    "Max CPC %": int(round(float(p.get("max_cpc_increase_pct", 25)))),
+                    "Max Perf Drop %": round(100.0 * float(p.get("max_perf_drop", 0.15)), 1),
+                    "Min New Perf %": round(100.0 * float(p.get("min_new_performance", 0.8)), 1),
+                    "Derived Mode": strategy_profile_mode(float(p.get("growth_vs_cost", 0.5))),
+                }
+            )
+        profile_df = pd.DataFrame(profile_rows).sort_values("Strategy")
+        if "plan_profile_editor_df" not in st.session_state:
+            st.session_state["plan_profile_editor_df"] = profile_df.copy()
+        with st.form("plan_profile_form", clear_on_submit=False):
+            edited_profile_df = st.data_editor(
+                st.session_state["plan_profile_editor_df"],
+                use_container_width=True,
+                hide_index=True,
+                key="plan_profile_editor",
+                column_config={
+                    "Strategy": st.column_config.TextColumn("Strategy", disabled=True),
+                    "Growth vs Cost (0-100)": st.column_config.NumberColumn("Growth vs Cost (0-100)", min_value=0, max_value=100, step=1),
+                    "Max CPC %": st.column_config.NumberColumn("Max CPC %", min_value=0, max_value=45, step=1),
+                    "Max Perf Drop %": st.column_config.NumberColumn("Max Perf Drop %", min_value=0.0, max_value=60.0, step=0.5),
+                    "Min New Perf %": st.column_config.NumberColumn("Min New Perf %", min_value=20.0, max_value=150.0, step=0.5),
+                    "Derived Mode": st.column_config.TextColumn("Derived Mode", disabled=True),
+                },
+                disabled=["Strategy", "Derived Mode"],
+            )
+            save_profiles = st.form_submit_button("Save Strategy Settings", type="primary")
+        edited_profile_df = edited_profile_df.copy()
+        edited_profile_df["Growth vs Cost (0-100)"] = pd.to_numeric(
+            edited_profile_df["Growth vs Cost (0-100)"], errors="coerce"
+        ).fillna(50).clip(0, 100)
+        edited_profile_df["Derived Mode"] = edited_profile_df["Growth vs Cost (0-100)"].map(
+            lambda x: strategy_profile_mode(float(x) / 100.0)
+        )
+        st.session_state["plan_profile_editor_df"] = edited_profile_df
+        if save_profiles:
+            next_profiles = {}
+            for _, rr in edited_profile_df.iterrows():
+                sname = str(rr.get("Strategy", "")).strip()
+                if not sname:
+                    continue
+                next_profiles[sname] = {
+                    "growth_vs_cost": float(np.clip(as_float(rr.get("Growth vs Cost (0-100)"), 50.0) / 100.0, 0.0, 1.0)),
+                    "max_cpc_increase_pct": float(np.clip(as_float(rr.get("Max CPC %"), 25.0), 0.0, 45.0)),
+                    "max_perf_drop": float(np.clip(as_float(rr.get("Max Perf Drop %"), 15.0) / 100.0, 0.0, 0.60)),
+                    "min_new_performance": float(np.clip(as_float(rr.get("Min New Perf %"), 80.0) / 100.0, 0.20, 1.50)),
+                }
+            ok_sp, err_sp = save_strategy_profiles(next_profiles)
+            if ok_sp:
+                st.success("Strategy settings saved.")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(err_sp)
+
+        st.markdown("**3. Add New Strategy**")
+        with st.form("plan_add_strategy_form", clear_on_submit=True):
+            new_strategy_name = st.text_input("Strategy name")
+            add_strategy = st.form_submit_button("Add Strategy")
+        if add_strategy:
+            nm = str(new_strategy_name or "").strip()
+            if not nm:
+                st.error("Please enter a strategy name.")
+            else:
+                updated = normalize_strategy_profiles(strategy_profiles)
+                if nm not in updated:
+                    updated[nm] = {
+                        "growth_vs_cost": 0.50,
+                        "max_cpc_increase_pct": 25.0,
+                        "max_perf_drop": 0.15,
+                        "min_new_performance": 0.80,
+                    }
+                    ok_ns, err_ns = save_strategy_profiles(updated)
+                    if ok_ns:
+                        st.success(f"Added strategy `{nm}`.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(err_ns)
+                else:
+                    st.info("Strategy already exists.")
+
+    elif selected_tab == tab_labels[2]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
         map_df["Expected_Additional_Clicks"] = map_df["Expected_Additional_Clicks"].fillna(0)
         map_df["Expected_Additional_Binds"] = map_df["Expected_Additional_Binds"].fillna(0)
@@ -2888,7 +3090,7 @@ def main() -> None:
                             render_formatted_table(audit_df, use_container_width=True)
                         st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
 
-    elif selected_tab == tab_labels[2]:
+    elif selected_tab == tab_labels[3]:
         st.subheader("📊 Channel Group Analysis")
         current_binds = rec_df["Binds"].fillna(0).sum()
         add_binds = rec_df["Expected Additional Binds"].fillna(0).sum()
@@ -3003,7 +3205,7 @@ def main() -> None:
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
         render_formatted_table(grp, use_container_width=True)
 
-    elif selected_tab == tab_labels[3]:
+    elif selected_tab == tab_labels[4]:
         st.subheader("🧠 Channel Group + State Recommendations")
 
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -3059,7 +3261,7 @@ def main() -> None:
             mime="text/csv",
         )
 
-    elif selected_tab == tab_labels[4]:
+    elif selected_tab == tab_labels[5]:
         st.subheader("🧪 Price Exploration Details")
         st.caption("Master-detail view of valid test points by state + channel group.")
         st.markdown(
@@ -3614,7 +3816,7 @@ def main() -> None:
                             ]
                             st.dataframe(show_tbl, use_container_width=True, hide_index=True)
 
-    elif selected_tab == tab_labels[5]:
+    elif selected_tab == tab_labels[6]:
         st.subheader("📚 General Analytics")
         st.caption("Drag dimensions to row groups/pivot, reorder, and hide columns from the Columns panel.")
         st.markdown(
@@ -3975,7 +4177,7 @@ def main() -> None:
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
 
-    elif selected_tab == tab_labels[6]:
+    elif selected_tab == tab_labels[7]:
         st.subheader("🌌 Neon Insights Cockpit")
         st.caption("Futuristic overview of growth, intent, performance, and strategy using current model outputs.")
         if fast_mode:

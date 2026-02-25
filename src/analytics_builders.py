@@ -25,27 +25,26 @@ def build_price_exploration_master_detail(
     base["SC Key"] = base["State"].astype(str) + "|" + base["Channel Groups"].astype(str)
 
     pe = price_eval_df.copy()
-    pe = pe[
-        pe["Stat Sig Price Point"].fillna(False)
-        & (pe["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0)
-    ].copy()
-    min_adj = -30.0 if mode_factor(settings.optimization_mode) <= 0.5 else 0.0
-    pe = pe[pe["Price Adjustment Percent"].fillna(0) >= min_adj].copy()
     if pe.empty:
         return pd.DataFrame(), pd.DataFrame()
 
     bids_sig = max(float(settings.min_bids_price_sig), 1.0)
     clicks_sig = max(float(settings.min_clicks_price_sig), 1.0)
     pe["Sig Score"] = np.minimum(pe["Bids"].fillna(0) / bids_sig, pe["Clicks"].fillna(0) / clicks_sig)
+    pe["Recommend Eligible"] = pe["Stat Sig Price Point"].fillna(False).astype(bool)
     pe["Sig Level"] = np.select(
-        [pe["Sig Score"] >= 2.5, pe["Sig Score"] >= 1.5],
-        ["Strong", "Medium"],
-        default="Weak",
+        [
+            pe["Recommend Eligible"] & (pe["Sig Score"] >= 2.5),
+            pe["Recommend Eligible"] & (pe["Sig Score"] >= 1.5),
+            pe["Recommend Eligible"],
+            (pe["Bids"].fillna(0) > 0) | (pe["Clicks"].fillna(0) > 0),
+        ],
+        ["Strong", "Medium", "Weak", "Poor"],
+        default="No Sig",
     )
-    pe = pe[pe["Sig Level"] != "Weak"].copy()
-    if pe.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    pe["Sig Icon"] = pe["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
+    pe["Sig Icon"] = pe["Sig Level"].map(
+        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
+    ).fillna("⚪")
 
     grp_cols = ["Channel Groups", "Price Adjustment Percent"]
     if "State" in pe.columns:
@@ -57,14 +56,21 @@ def build_price_exploration_master_detail(
         **{"Win Rate Uplift": ("Win Rate Lift %", "mean")},
         **{"CPC Uplift": ("CPC Lift %", "mean")},
         Sig_Score=("Sig Score", "mean"),
+        Recommend_Eligible=("Recommend Eligible", "max"),
     )
     cand_state["Sig Level"] = np.select(
-        [cand_state["Sig_Score"] >= 2.5, cand_state["Sig_Score"] >= 1.5],
-        ["Strong", "Medium"],
-        default="Weak",
+        [
+            cand_state["Recommend_Eligible"] & (cand_state["Sig_Score"] >= 2.5),
+            cand_state["Recommend_Eligible"] & (cand_state["Sig_Score"] >= 1.5),
+            cand_state["Recommend_Eligible"],
+            (cand_state["Test_Bids"].fillna(0) > 0) | (cand_state["Test_Clicks"].fillna(0) > 0),
+        ],
+        ["Strong", "Medium", "Weak", "Poor"],
+        default="No Sig",
     )
-    cand_state = cand_state[cand_state["Sig Level"] != "Weak"].copy()
-    cand_state["Sig Icon"] = cand_state["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
+    cand_state["Sig Icon"] = cand_state["Sig Level"].map(
+        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
+    ).fillna("⚪")
 
     if "State" in cand_state.columns:
         cand_ch = cand_state.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False).agg(
@@ -73,14 +79,21 @@ def build_price_exploration_master_detail(
             **{"Win Rate Uplift": ("Win Rate Uplift", "mean")},
             **{"CPC Uplift": ("CPC Uplift", "mean")},
             Sig_Score=("Sig_Score", "mean"),
+            Recommend_Eligible=("Recommend_Eligible", "max"),
         )
         cand_ch["Sig Level"] = np.select(
-            [cand_ch["Sig_Score"] >= 2.5, cand_ch["Sig_Score"] >= 1.5],
-            ["Strong", "Medium"],
-            default="Weak",
+            [
+                cand_ch["Recommend_Eligible"] & (cand_ch["Sig_Score"] >= 2.5),
+                cand_ch["Recommend_Eligible"] & (cand_ch["Sig_Score"] >= 1.5),
+                cand_ch["Recommend_Eligible"],
+                (cand_ch["Test_Bids"].fillna(0) > 0) | (cand_ch["Test_Clicks"].fillna(0) > 0),
+            ],
+            ["Strong", "Medium", "Weak", "Poor"],
+            default="No Sig",
         )
-        cand_ch = cand_ch[cand_ch["Sig Level"] != "Weak"].copy()
-        cand_ch["Sig Icon"] = cand_ch["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
+        cand_ch["Sig Icon"] = cand_ch["Sig Level"].map(
+            {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
+        ).fillna("⚪")
 
         state_pairs = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates()
         merged_parts: list[pd.DataFrame] = []

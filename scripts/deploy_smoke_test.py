@@ -66,6 +66,7 @@ def assert_required_columns(df: pd.DataFrame) -> None:
 
 def build_data(settings: Settings):
     p = DEFAULT_PATHS
+    profiles = app.normalize_strategy_profiles(app.load_strategy_profiles())
     mt = (
         app.file_mtime(p["state_strategy"]),
         app.file_mtime(p["state_data"]),
@@ -73,6 +74,8 @@ def build_data(settings: Settings):
         app.file_mtime(p["channel_group"]),
         app.file_mtime(p["channel_price_exp"]),
         app.file_mtime(p["channel_state"]),
+        app.file_mtime("data/state_strategy_overrides.json"),
+        app.file_mtime("data/strategy_profiles.json"),
     )
     return app.build_all_from_paths(
         p["state_strategy"],
@@ -82,6 +85,7 @@ def build_data(settings: Settings):
         p["channel_price_exp"],
         p["channel_state"],
         settings,
+        profiles,
         mt,
     )
 

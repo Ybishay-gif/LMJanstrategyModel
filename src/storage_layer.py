@@ -5,6 +5,7 @@ from config import OVERRIDES_PATH
 
 ANALYTICS_PRESETS_PATH = Path("data/analytics_presets.json")
 STATE_STRATEGY_OVERRIDES_PATH = Path("data/state_strategy_overrides.json")
+STRATEGY_PROFILES_PATH = Path("data/strategy_profiles.json")
 
 
 def load_overrides_from_disk() -> dict:
@@ -76,3 +77,29 @@ def save_state_strategy_overrides(overrides: dict) -> tuple[bool, str]:
         return True, ""
     except Exception:
         return False, "Failed to write state strategy overrides."
+
+
+def load_strategy_profiles() -> dict:
+    try:
+        if not STRATEGY_PROFILES_PATH.exists():
+            return {}
+        data = json.loads(STRATEGY_PROFILES_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_strategy_profiles(profiles: dict) -> tuple[bool, str]:
+    try:
+        STRATEGY_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        cleaned = {}
+        for k, v in (profiles or {}).items():
+            sk = str(k or "").strip()
+            if not sk:
+                continue
+            if isinstance(v, dict):
+                cleaned[sk] = v
+        STRATEGY_PROFILES_PATH.write_text(json.dumps(cleaned, indent=2))
+        return True, ""
+    except Exception:
+        return False, "Failed to write strategy profiles."
