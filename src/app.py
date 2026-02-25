@@ -2093,20 +2093,22 @@ def main() -> None:
             with st.container(border=True):
                 st.markdown(f"**{strat}**")
                 st.caption(f"States: {states_txt}")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Clicks", f"{s_clicks:,.0f}")
-                c2.metric("Cost", f"${s_cost:,.0f}")
-                c3.metric("Win Rate", "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}")
-                c4.metric("Binds", f"{s_binds:,.0f}")
-                c5.metric("CPB", "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}")
-                c6, c7, c8 = st.columns(3)
-                c6.metric("ROE", "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}")
-                c7.metric("LTV", "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}")
-                c8.metric("Combined Ratio", "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}")
-                c9, c10, c11 = st.columns(3)
-                c9.metric("Additional Clicks", f"{s_add_clicks:,.0f}")
-                c10.metric("Additional Binds", f"{s_add_binds:,.1f}")
-                c11.metric("Required Budget", f"${s_add_budget:,.0f}")
+                render_kpi_tiles(
+                    [
+                        {"label": "Clicks", "value": f"{s_clicks:,.0f}", "sub": "Current"},
+                        {"label": "Cost", "value": f"${s_cost:,.0f}", "sub": "Current spend"},
+                        {"label": "Win Rate", "value": "n/a" if pd.isna(s_wr) else f"{s_wr:.1%}", "sub": "Clicks / bids"},
+                        {"label": "Binds", "value": f"{s_binds:,.0f}", "sub": "Current"},
+                        {"label": "CPB", "value": "n/a" if pd.isna(s_cpb) else f"${s_cpb:,.0f}", "sub": "Cost per bind"},
+                        {"label": "ROE", "value": "n/a" if pd.isna(s_roe) else f"{s_roe:.1%}", "sub": "Weighted"},
+                        {"label": "LTV", "value": "n/a" if pd.isna(s_ltv) else f"${s_ltv:,.0f}", "sub": "Weighted avg"},
+                        {"label": "Combined Ratio", "value": "n/a" if pd.isna(s_cr) else f"{s_cr:.1%}", "sub": "Weighted"},
+                        {"label": "Additional Clicks", "value": f"{s_add_clicks:,.0f}", "sub": "Expected upside"},
+                        {"label": "Additional Binds", "value": f"{s_add_binds:,.1f}", "sub": "Expected upside"},
+                        {"label": "Required Budget", "value": f"${s_add_budget:,.0f}", "sub": "To capture upside"},
+                    ],
+                    cols=6,
+                )
 
                 seg_tbl = rec_sec.groupby("Segment", as_index=False).agg(
                     Clicks=("Clicks", "sum"),
