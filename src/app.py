@@ -3816,6 +3816,26 @@ def main() -> None:
     elif selected_tab == tab_labels[5]:
         st.subheader("📚 General Analytics")
         st.caption("Drag dimensions to row groups/pivot, reorder, and hide columns from the Columns panel.")
+        st.markdown(
+            """
+            <style>
+            .ga-shell {
+                border: 1px solid rgba(45,212,191,0.62);
+                border-radius: 14px;
+                box-shadow: 0 0 0 1px rgba(45,212,191,0.18), 0 8px 24px rgba(2,6,23,0.35);
+                background: linear-gradient(145deg, rgba(10,16,28,0.64), rgba(10,16,28,0.38));
+                padding: 8px 10px 10px 10px;
+                margin-top: 8px;
+            }
+            .ga-note {
+                color: #93c5fd;
+                font-size: 0.82rem;
+                margin-bottom: 8px;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
         _master_a, detail_a = build_price_exploration_master_detail(rec_df, price_eval, settings)
         analytics_df = build_general_analytics_df(rec_df, state_df, detail_a)
@@ -3880,7 +3900,21 @@ def main() -> None:
             go["pivotPanelShow"] = "always"
             go["animateRows"] = True
             go["sideBar"] = {"toolPanels": ["columns", "filters"], "defaultToolPanel": "columns"}
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Rows", f"{len(gdf):,}")
+            c2.metric("States", f"{gdf['State'].nunique() if 'State' in gdf.columns else 0:,}")
+            c3.metric("Channel Groups", f"{gdf['Channel Groups'].nunique() if 'Channel Groups' in gdf.columns else 0:,}")
 
+            custom_css = {
+                ".ag-root-wrapper": {"border": "1px solid rgba(45,212,191,0.45)", "border-radius": "10px"},
+                ".ag-header": {"background-color": "#0f172a"},
+                ".ag-header-cell-label": {"color": "#c7d2fe", "font-weight": "700"},
+                ".ag-row": {"color": "#e2e8f0"},
+                ".ag-row-hover": {"background-color": "rgba(34,211,238,0.08) !important"},
+                ".ag-side-bar": {"background-color": "#0b1220"},
+                ".ag-tool-panel-wrapper": {"background-color": "#0b1220", "color": "#cbd5e1"},
+            }
+            st.markdown("<div class='ga-shell'><div class='ga-note'>Use the side panel to drag dimensions between Row Groups, Columns, and Values.</div>", unsafe_allow_html=True)
             AgGrid(
                 gdf,
                 gridOptions=go,
@@ -3889,9 +3923,11 @@ def main() -> None:
                 height=640,
                 enable_enterprise_modules=True,
                 theme="alpine-dark" if dark_mode else "streamlit",
+                custom_css=custom_css,
                 allow_unsafe_jscode=True,
                 key="tab5_general_analytics_grid",
             )
+            st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
