@@ -823,12 +823,23 @@ def prepare_price_exploration(price_df: pd.DataFrame, settings: Settings) -> tup
         ["Win Rate Lift %", "Growth Opportunity Score"],
         ascending=False,
     ).groupby("Channel Groups", as_index=False).first()
-    # Ensure every channel group has a default baseline candidate.
+    # Ensure every channel group has exactly one default baseline candidate.
+    # `out` may include state-level rows, so baseline must be deduplicated by channel.
     baseline = out[out["Price Adjustment Percent"] == 0].copy()
     if not baseline.empty:
+        baseline = baseline.sort_values(
+            ["Channel Groups", "Bids", "Clicks"],
+            ascending=[True, False, False],
+        ).groupby("Channel Groups", as_index=False).first()
         missing = baseline[~baseline["Channel Groups"].isin(best["Channel Groups"])]
         if not missing.empty:
             best = pd.concat([best, missing], ignore_index=True)
+
+    # Safety: force single-row key to avoid row multiplication on channel merge.
+    best = best.sort_values(
+        ["Channel Groups", "Win Rate Lift %", "Growth Opportunity Score"],
+        ascending=[True, False, False],
+    ).groupby("Channel Groups", as_index=False).first()
 
     best["Has Sig Price Evidence"] = best["Channel Groups"].isin(
         feasible["Channel Groups"].dropna().unique().tolist()
