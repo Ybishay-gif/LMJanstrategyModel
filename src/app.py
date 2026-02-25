@@ -726,6 +726,7 @@ def build_model_tables(
     )
 
     rec["Suggested Price Adjustment %"] = rec["Price Adjustment Percent"].fillna(0)
+    rec["Applied Price Adjustment %"] = rec["Suggested Price Adjustment %"]
     rec["Growth Score"] = np.where(rec["Has Sig Price Evidence"], rec["Growth Opportunity Score"].fillna(0), 0.0)
     rec["Intent Score Raw"] = (
         0.60 * rec["Quote Start Rate"].fillna(0)
@@ -746,41 +747,9 @@ def build_model_tables(
         + 0.20 * rec["Strategy Scale"].fillna(0.5)
     )
 
-    rec.loc[rec["Composite Score"] >= settings.aggressive_cutoff, "Suggested Price Adjustment %"] = np.maximum(
-        rec["Suggested Price Adjustment %"], 20
-    )
-    rec.loc[
-        (rec["Composite Score"] >= settings.controlled_cutoff)
-        & (rec["Composite Score"] < settings.aggressive_cutoff),
-        "Suggested Price Adjustment %",
-    ] = np.maximum(np.minimum(rec["Suggested Price Adjustment %"], 30), 15)
-    rec.loc[
-        (rec["Composite Score"] >= settings.maintain_cutoff)
-        & (rec["Composite Score"] < settings.controlled_cutoff),
-        "Suggested Price Adjustment %",
-    ] = 10
-    rec.loc[rec["Composite Score"] < settings.maintain_cutoff, "Suggested Price Adjustment %"] = 5
-
     rec["Strategy Max Adj %"] = rec["Strategy Bucket"].apply(lambda x: strategy_max_adjustment(x, settings))
     rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
-
-    rec.loc[rec["Intent Score"] < settings.min_intent_for_scale, "Suggested Price Adjustment %"] = np.minimum(
-        rec["Suggested Price Adjustment %"], 10
-    )
-    # Pull back only when both unit economics are materially weak.
-    hard_pullback = (rec["ROE Proxy"] < settings.roe_pullback_floor) & (rec["CR Proxy"] > settings.cr_pullback_ceiling)
-    rec.loc[hard_pullback, "Suggested Price Adjustment %"] = -5
-
-    # Growth-lane boost for momentum states with high intent.
-    growth_lane = (
-        rec["Strategy Bucket"].isin(["Strongest Momentum", "Moderate Momentum"])
-        & (rec["Intent Score"] >= 0.90)
-        & (rec["Growth Score"] > 0.05)
-    )
-    rec.loc[growth_lane, "Suggested Price Adjustment %"] = np.maximum(rec["Suggested Price Adjustment %"], 20)
-    rec["Suggested Price Adjustment %"] = np.minimum(rec["Suggested Price Adjustment %"], rec["Strategy Max Adj %"])
-
-    rec = apply_price_effects(rec, price_eval_df, settings)
+    rec["Applied Price Adjustment %"] = np.minimum(rec["Applied Price Adjustment %"], rec["Strategy Max Adj %"])
     rec["Clicks Lift %"] = rec["Clicks Lift %"].fillna(0)
     rec["Win Rate Lift %"] = rec["Win Rate Lift %"].fillna(0)
     rec["CPC Lift %"] = rec["CPC Lift %"].fillna(0)
