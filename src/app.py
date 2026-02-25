@@ -3879,21 +3879,21 @@ def main() -> None:
                     gb.configure_column(c, type=["numericColumn"], aggFunc=agg)
 
             if "Win Rate" in gdf.columns:
-                gb.configure_column("Win Rate", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(2)+'%';}"))
+                gb.configure_column("Win Rate", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
             if "Channel QSR" in gdf.columns:
-                gb.configure_column("Channel QSR", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(2)+'%';}"))
+                gb.configure_column("Channel QSR", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
             if "Channel Q2C" in gdf.columns:
-                gb.configure_column("Channel Q2C", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(2)+'%';}"))
+                gb.configure_column("Channel Q2C", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
             if "State ROE" in gdf.columns:
-                gb.configure_column("State ROE", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(1)+'%';}"))
+                gb.configure_column("State ROE", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(1)+'%':'';}"))
             if "State Combined Ratio" in gdf.columns:
-                gb.configure_column("State Combined Ratio", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(1)+'%';}"))
+                gb.configure_column("State Combined Ratio", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(1)+'%':'';}"))
             if "Avg Bid" in gdf.columns:
-                gb.configure_column("Avg Bid", valueFormatter=JsCode("function(p){return p.value==null?'':'$'+p.value.toFixed(2);}"))
+                gb.configure_column("Avg Bid", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+v.toFixed(2)):'';}"))
             if "CPC" in gdf.columns:
-                gb.configure_column("CPC", valueFormatter=JsCode("function(p){return p.value==null?'':'$'+p.value.toFixed(2);}"))
+                gb.configure_column("CPC", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+v.toFixed(2)):'';}"))
             if "Cost" in gdf.columns:
-                gb.configure_column("Cost", valueFormatter=JsCode("function(p){return p.value==null?'':'$'+Math.round(p.value).toLocaleString();}"))
+                gb.configure_column("Cost", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+Math.round(v).toLocaleString()):'';}"))
 
             go = gb.build()
             go["rowGroupPanelShow"] = "always"
