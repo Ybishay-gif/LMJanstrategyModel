@@ -4,6 +4,7 @@ from pathlib import Path
 from config import OVERRIDES_PATH
 
 ANALYTICS_PRESETS_PATH = Path("data/analytics_presets.json")
+STATE_STRATEGY_OVERRIDES_PATH = Path("data/state_strategy_overrides.json")
 
 
 def load_overrides_from_disk() -> dict:
@@ -42,3 +43,36 @@ def save_analytics_presets(presets: dict) -> tuple[bool, str]:
         return True, ""
     except Exception:
         return False, "Failed to write analytics presets file."
+
+
+def load_state_strategy_overrides() -> dict:
+    try:
+        if not STATE_STRATEGY_OVERRIDES_PATH.exists():
+            return {}
+        data = json.loads(STATE_STRATEGY_OVERRIDES_PATH.read_text())
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for k, v in data.items():
+            ks = str(k or "").strip().upper()
+            vs = str(v or "").strip()
+            if len(ks) == 2 and vs:
+                out[ks] = vs
+        return out
+    except Exception:
+        return {}
+
+
+def save_state_strategy_overrides(overrides: dict) -> tuple[bool, str]:
+    try:
+        STATE_STRATEGY_OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        cleaned = {}
+        for k, v in (overrides or {}).items():
+            ks = str(k or "").strip().upper()
+            vs = str(v or "").strip()
+            if len(ks) == 2 and vs:
+                cleaned[ks] = vs
+        STATE_STRATEGY_OVERRIDES_PATH.write_text(json.dumps(cleaned, indent=2))
+        return True, ""
+    except Exception:
+        return False, "Failed to write state strategy overrides."

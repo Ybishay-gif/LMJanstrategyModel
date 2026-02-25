@@ -31,6 +31,30 @@ def parse_state_strategy_text(raw: str) -> pd.DataFrame:
     return pd.DataFrame(pairs, columns=["State", "Strategy Bucket"]).drop_duplicates("State")
 
 
+def apply_strategy_overrides(strategy_df: pd.DataFrame, overrides: dict) -> pd.DataFrame:
+    out = strategy_df.copy()
+    if out.empty:
+        return out
+    out["State"] = out["State"].astype(str).str.upper()
+    if not overrides:
+        return out
+    ov = {
+        str(k or "").strip().upper(): str(v or "").strip()
+        for k, v in overrides.items()
+        if str(k or "").strip() and str(v or "").strip()
+    }
+    if not ov:
+        return out
+    out["Strategy Bucket"] = out["State"].map(ov).fillna(out["Strategy Bucket"])
+    missing_states = [s for s in ov.keys() if s not in set(out["State"].tolist())]
+    if missing_states:
+        add_df = pd.DataFrame(
+            {"State": missing_states, "Strategy Bucket": [ov[s] for s in missing_states]}
+        )
+        out = pd.concat([out, add_df], ignore_index=True)
+    return out.drop_duplicates("State")
+
+
 def file_mtime(path: str) -> float:
     try:
         return float(Path(path).stat().st_mtime)

@@ -61,7 +61,7 @@ from auth_layer import (
     perform_logout,
     render_top_icons,
 )
-from data_io import read_csv, read_state_strategy, parse_state_strategy_text, file_mtime
+from data_io import read_csv, read_state_strategy, parse_state_strategy_text, apply_strategy_overrides, file_mtime
 from core_helpers import (
     to_numeric,
     normalize_columns,
@@ -79,6 +79,9 @@ from storage_layer import (
     save_overrides_to_disk,
     load_analytics_presets,
     save_analytics_presets,
+    STATE_STRATEGY_OVERRIDES_PATH,
+    load_state_strategy_overrides,
+    save_state_strategy_overrides,
 )
 from analytics_builders import (
     build_price_exploration_master_detail,
@@ -96,11 +99,12 @@ def build_all_from_paths(
     price_path: str,
     channel_state_path: str,
     settings: Settings,
-    mtime_signature: tuple[float, float, float, float, float, float],
+    mtime_signature: tuple[float, ...],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     # mtime_signature is only for cache invalidation when files change.
     _ = mtime_signature
     strategy_df = read_state_strategy(strategy_path)
+    strategy_df = apply_strategy_overrides(strategy_df, load_state_strategy_overrides())
     state_raw = read_csv(state_path)
     state_seg_raw = read_csv(state_seg_path)
     _ = read_csv(channel_group_path)
@@ -1647,6 +1651,7 @@ def main() -> None:
     _ = run
 
     try:
+        base_strategy_df = pd.DataFrame(columns=["State", "Strategy Bucket"])
         if data_mode == "Repo data (GitHub)":
             strategy_path = DEFAULT_PATHS["state_strategy"]
             state_path = DEFAULT_PATHS["state_data"]
@@ -1654,6 +1659,7 @@ def main() -> None:
             channel_group_path = DEFAULT_PATHS["channel_group"]
             price_path = DEFAULT_PATHS["channel_price_exp"]
             channel_state_path = DEFAULT_PATHS["channel_state"]
+            base_strategy_df = read_state_strategy(strategy_path)
             mtimes = (
                 file_mtime(strategy_path),
                 file_mtime(state_path),
@@ -1661,6 +1667,7 @@ def main() -> None:
                 file_mtime(channel_group_path),
                 file_mtime(price_path),
                 file_mtime(channel_state_path),
+                file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
             )
             rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
                 strategy_path,
@@ -1683,6 +1690,8 @@ def main() -> None:
 
             strategy_text = strategy_upload.getvalue().decode("utf-8", errors="ignore")
             strategy_df = parse_state_strategy_text(strategy_text)
+            base_strategy_df = strategy_df.copy()
+            strategy_df = apply_strategy_overrides(strategy_df, load_state_strategy_overrides())
             state_raw = pd.read_csv(state_upload)
             state_seg_raw = pd.read_csv(state_seg_upload)
             _ = pd.read_csv(channel_group_upload)
@@ -1696,6 +1705,7 @@ def main() -> None:
                 state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings
             )
         else:
+            base_strategy_df = read_state_strategy(strategy_path)
             mtimes = (
                 file_mtime(strategy_path),
                 file_mtime(state_path),
@@ -1703,6 +1713,7 @@ def main() -> None:
                 file_mtime(channel_group_path),
                 file_mtime(price_path),
                 file_mtime(channel_state_path),
+                file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
             )
             rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
                 strategy_path,
@@ -1799,6 +1810,81 @@ def main() -> None:
             ],
             cols=4,
         )
+
+        st.markdown("**Product Strategy Editor (Save Required)**")
+        base_map = (
+            base_strategy_df[["State", "Strategy Bucket"]]
+            .dropna()
+            .assign(State=lambda d: d["State"].astype(str).str.upper())
+            .drop_duplicates("State")
+            .set_index("State")["Strategy Bucket"]
+            .to_dict()
+            if isinstance(base_strategy_df, pd.DataFrame) and not base_strategy_df.empty
+            else {}
+        )
+        current_map = (
+            state_df[["State", "Strategy Bucket"]]
+            .dropna()
+            .assign(State=lambda d: d["State"].astype(str).str.upper())
+            .drop_duplicates("State")
+            .set_index("State")["Strategy Bucket"]
+            .to_dict()
+        )
+        states_sorted = sorted(current_map.keys())
+        strategy_options = list(STRATEGY_SCALE.keys())
+        editor_src = pd.DataFrame(
+            {
+                "State": states_sorted,
+                "Current Strategy": [current_map.get(s, "") for s in states_sorted],
+                "Selected Strategy": [current_map.get(s, "") for s in states_sorted],
+                "Base Strategy": [base_map.get(s, current_map.get(s, "")) for s in states_sorted],
+            }
+        )
+        if (
+            "tab0_strategy_editor_df" not in st.session_state
+            or st.session_state.get("tab0_strategy_editor_states") != tuple(states_sorted)
+        ):
+            st.session_state["tab0_strategy_editor_df"] = editor_src.copy()
+            st.session_state["tab0_strategy_editor_states"] = tuple(states_sorted)
+
+        edited_strategy_df = st.data_editor(
+            st.session_state["tab0_strategy_editor_df"],
+            use_container_width=True,
+            hide_index=True,
+            key="tab0_strategy_editor",
+            column_config={
+                "State": st.column_config.TextColumn("State", disabled=True),
+                "Current Strategy": st.column_config.TextColumn("Current Strategy", disabled=True),
+                "Selected Strategy": st.column_config.SelectboxColumn(
+                    "Selected Strategy",
+                    options=strategy_options,
+                    required=True,
+                ),
+                "Base Strategy": st.column_config.TextColumn("Base Strategy", disabled=True),
+            },
+            disabled=["State", "Current Strategy", "Base Strategy"],
+        )
+        st.session_state["tab0_strategy_editor_df"] = edited_strategy_df.copy()
+        if st.button("Save Product Strategy", key="tab0_save_strategy_btn", type="primary"):
+            prev_overrides = dict(load_state_strategy_overrides())
+            next_overrides = dict(prev_overrides)
+            for _, rr in edited_strategy_df.iterrows():
+                st_code = str(rr.get("State", "")).strip().upper()
+                sel = str(rr.get("Selected Strategy", "")).strip()
+                base = str(rr.get("Base Strategy", "")).strip()
+                if not st_code or not sel:
+                    continue
+                if sel == base:
+                    next_overrides.pop(st_code, None)
+                else:
+                    next_overrides[st_code] = sel
+            ok_so, err_so = save_state_strategy_overrides(next_overrides)
+            if ok_so:
+                st.success("Saved new product strategy. Recalculating model...")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(err_so)
 
         map_mode0 = st.radio(
             "Map color mode",
