@@ -1318,6 +1318,78 @@ def build_price_exploration_detail_lookup(detail_df: pd.DataFrame) -> dict[str, 
     return out
 
 
+@st.cache_data(show_spinner=False)
+def build_general_analytics_df(
+    rec_df: pd.DataFrame,
+    state_df: pd.DataFrame,
+    detail_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if rec_df is None or rec_df.empty or detail_df is None or detail_df.empty:
+        return pd.DataFrame()
+
+    base = rec_df.groupby(["State", "Channel Groups", "Segment"], as_index=False).agg(
+        **{"Product Strategy": ("Strategy Bucket", "first")},
+        **{"Num Bids": ("Bids", "sum")},
+        **{"Num Impressions": ("Impressions", "sum")},
+        **{"Clicks (State-Channel)": ("Clicks", "sum")},
+        **{"Quotes (State-Channel)": ("Quotes", "sum")},
+        **{"Cost": ("Total Click Cost", "sum")},
+    )
+    base["Cost"] = np.where(
+        pd.to_numeric(base["Cost"], errors="coerce").fillna(0) > 0,
+        pd.to_numeric(base["Cost"], errors="coerce").fillna(0),
+        0.0,
+    )
+
+    w = rec_df.copy()
+    w["__w_bids__"] = pd.to_numeric(w["Bids"], errors="coerce").fillna(0.0)
+    w["__avg_bid_x_w__"] = pd.to_numeric(w["Avg. Bid"], errors="coerce").fillna(0.0) * w["__w_bids__"]
+    w["__avg_cpc_x_clicks__"] = pd.to_numeric(w["Avg. CPC"], errors="coerce").fillna(0.0) * pd.to_numeric(w["Clicks"], errors="coerce").fillna(0.0)
+    w["__wr_x_bids__"] = pd.to_numeric(w["Bids to Clicks"], errors="coerce").fillna(0.0) * w["__w_bids__"]
+    wt = w.groupby(["State", "Channel Groups", "Segment"], as_index=False).agg(
+        __w_bids__=("__w_bids__", "sum"),
+        __clicks__=("Clicks", "sum"),
+        __avg_bid_x_w__=("__avg_bid_x_w__", "sum"),
+        __avg_cpc_x_clicks__=("__avg_cpc_x_clicks__", "sum"),
+        __wr_x_bids__=("__wr_x_bids__", "sum"),
+    )
+    wt["Avg Bid"] = np.where(wt["__w_bids__"] > 0, wt["__avg_bid_x_w__"] / wt["__w_bids__"], np.nan)
+    wt["CPC"] = np.where(wt["__clicks__"] > 0, wt["__avg_cpc_x_clicks__"] / wt["__clicks__"], np.nan)
+    wt["Win Rate"] = np.where(wt["__w_bids__"] > 0, wt["__wr_x_bids__"] / wt["__w_bids__"], np.nan)
+    wt = wt[["State", "Channel Groups", "Segment", "Avg Bid", "CPC", "Win Rate"]]
+    base = base.merge(wt, on=["State", "Channel Groups", "Segment"], how="left")
+
+    ch_all = rec_df.groupby("Channel Groups", as_index=False).agg(
+        __ch_clicks=("Clicks", "sum"),
+        __ch_quotes=("Quotes", "sum"),
+        __ch_qsr_x_clicks=("Quote Start Rate", lambda s: np.nansum(pd.to_numeric(s, errors="coerce") * pd.to_numeric(rec_df.loc[s.index, "Clicks"], errors="coerce"))),
+        __ch_q2c_x_clicks=("Clicks to Quotes", lambda s: np.nansum(pd.to_numeric(s, errors="coerce") * pd.to_numeric(rec_df.loc[s.index, "Clicks"], errors="coerce"))),
+    )
+    ch_all["Channel Clicks"] = ch_all["__ch_clicks"]
+    ch_all["Channel Quotes"] = ch_all["__ch_quotes"]
+    ch_all["Channel QSR"] = np.where(ch_all["__ch_clicks"] > 0, ch_all["__ch_qsr_x_clicks"] / ch_all["__ch_clicks"], np.nan)
+    ch_all["Channel Q2C"] = np.where(ch_all["__ch_clicks"] > 0, ch_all["__ch_q2c_x_clicks"] / ch_all["__ch_clicks"], np.nan)
+    ch_all = ch_all[["Channel Groups", "Channel QSR", "Channel Q2C", "Channel Clicks", "Channel Quotes"]]
+
+    st_all = state_df[["State", "Binds", "ROE", "Combined Ratio"]].copy()
+    st_all = st_all.rename(
+        columns={
+            "Binds": "State Binds",
+            "ROE": "State ROE",
+            "Combined Ratio": "State Combined Ratio",
+        }
+    )
+
+    d = detail_df.copy()
+    d["Testing Point"] = d["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+    d = d[["State", "Channel Groups", "Segment", "Testing Point", "Bid Adj %", "Source Used"]].drop_duplicates()
+
+    out = d.merge(base, on=["State", "Channel Groups", "Segment"], how="left")
+    out = out.merge(ch_all, on="Channel Groups", how="left")
+    out = out.merge(st_all, on="State", how="left")
+    return out
+
+
 def format_adj_option_label(adj: float, click_uplift: float, cpc_uplift: float, cpb_impact: float, sig_level: str) -> str:
     cpb_txt = "n/a" if pd.isna(cpb_impact) else f"{cpb_impact:+.1%}"
     return (
@@ -2041,6 +2113,7 @@ def main() -> None:
         "📊 Tab 2: Channel Group Analysis",
         "🧠 Tab 3: Channel Group and States",
         "🧪 Tab 4: Price Exploration Details",
+        "📚 Tab 5: General Analytics",
         "🌌 Neon Insights Cockpit",
     ]
     selected_tab = st.radio(
@@ -3741,6 +3814,89 @@ def main() -> None:
                             st.dataframe(show_tbl, use_container_width=True, hide_index=True)
 
     elif selected_tab == tab_labels[5]:
+        st.subheader("📚 General Analytics")
+        st.caption("Drag dimensions to row groups/pivot, reorder, and hide columns from the Columns panel.")
+
+        _master_a, detail_a = build_price_exploration_master_detail(rec_df, price_eval, settings)
+        analytics_df = build_general_analytics_df(rec_df, state_df, detail_a)
+        if analytics_df.empty:
+            st.info("No analytics rows available for current filters/data.")
+        elif AGGRID_AVAILABLE:
+            dim_cols = ["Product Strategy", "State", "Channel Groups", "Testing Point", "Segment"]
+            metric_cols = [
+                "Num Bids",
+                "Num Impressions",
+                "Avg Bid",
+                "CPC",
+                "Win Rate",
+                "Cost",
+                "Channel QSR",
+                "Channel Q2C",
+                "Channel Clicks",
+                "Channel Quotes",
+                "State Binds",
+                "State ROE",
+                "State Combined Ratio",
+            ]
+            show_cols = [c for c in dim_cols + metric_cols + ["Source Used"] if c in analytics_df.columns]
+            gdf = analytics_df[show_cols].copy()
+
+            gb = GridOptionsBuilder.from_dataframe(gdf)
+            gb.configure_default_column(
+                resizable=True,
+                sortable=True,
+                filter=True,
+                enableRowGroup=True,
+                enablePivot=True,
+                enableValue=True,
+            )
+            for c in dim_cols:
+                if c in gdf.columns:
+                    gb.configure_column(c, rowGroup=(c in ["Product Strategy", "State"]), hide=False)
+            for c in metric_cols:
+                if c in gdf.columns:
+                    agg = "sum" if c in ["Num Bids", "Num Impressions", "Cost", "Channel Clicks", "Channel Quotes", "State Binds"] else "avg"
+                    gb.configure_column(c, type=["numericColumn"], aggFunc=agg)
+
+            if "Win Rate" in gdf.columns:
+                gb.configure_column("Win Rate", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(2)+'%';}"))
+            if "Channel QSR" in gdf.columns:
+                gb.configure_column("Channel QSR", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(2)+'%';}"))
+            if "Channel Q2C" in gdf.columns:
+                gb.configure_column("Channel Q2C", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(2)+'%';}"))
+            if "State ROE" in gdf.columns:
+                gb.configure_column("State ROE", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(1)+'%';}"))
+            if "State Combined Ratio" in gdf.columns:
+                gb.configure_column("State Combined Ratio", valueFormatter=JsCode("function(p){return p.value==null?'':(p.value*100).toFixed(1)+'%';}"))
+            if "Avg Bid" in gdf.columns:
+                gb.configure_column("Avg Bid", valueFormatter=JsCode("function(p){return p.value==null?'':'$'+p.value.toFixed(2);}"))
+            if "CPC" in gdf.columns:
+                gb.configure_column("CPC", valueFormatter=JsCode("function(p){return p.value==null?'':'$'+p.value.toFixed(2);}"))
+            if "Cost" in gdf.columns:
+                gb.configure_column("Cost", valueFormatter=JsCode("function(p){return p.value==null?'':'$'+Math.round(p.value).toLocaleString();}"))
+
+            go = gb.build()
+            go["rowGroupPanelShow"] = "always"
+            go["pivotPanelShow"] = "always"
+            go["animateRows"] = True
+            go["sideBar"] = {"toolPanels": ["columns", "filters"], "defaultToolPanel": "columns"}
+
+            AgGrid(
+                gdf,
+                gridOptions=go,
+                fit_columns_on_grid_load=False,
+                update_mode=GridUpdateMode.NO_UPDATE,
+                height=640,
+                enable_enterprise_modules=True,
+                theme="alpine-dark" if dark_mode else "streamlit",
+                allow_unsafe_jscode=True,
+                key="tab5_general_analytics_grid",
+            )
+        else:
+            st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
+            render_formatted_table(analytics_df, use_container_width=True)
+
+    elif selected_tab == tab_labels[6]:
         st.subheader("🌌 Neon Insights Cockpit")
         st.caption("Futuristic overview of growth, intent, performance, and strategy using current model outputs.")
         if fast_mode:
