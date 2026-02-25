@@ -3280,6 +3280,14 @@ def main() -> None:
                 box-shadow: 0 0 0 1px rgba(45,212,191,0.18), 0 8px 24px rgba(2,6,23,0.35);
                 background: linear-gradient(145deg, rgba(10,16,28,0.64), rgba(10,16,28,0.38));
             }
+            [class*="st-key-tab4_detail_shell_"] {
+                border: 1px solid rgba(56,189,248,0.22) !important;
+                border-radius: 14px !important;
+                box-shadow: 0 0 0 1px rgba(45,212,191,0.10), 0 8px 22px rgba(2,6,23,0.22);
+                background:
+                    radial-gradient(120% 120% at 0% 0%, rgba(14,165,233,0.12), rgba(14,165,233,0) 48%),
+                    linear-gradient(145deg, rgba(15,23,42,0.90), rgba(17,24,39,0.85));
+            }
             [class*="st-key-tab4_cards_scroll"] [data-testid="stVerticalBlock"]::-webkit-scrollbar-track {
                 background: rgba(15,23,42,0.55);
                 border-radius: 999px;
@@ -3491,17 +3499,26 @@ def main() -> None:
                                 option_labels_tab4[0] if option_labels_tab4 else f"{effective_adj:+.0f}%: current selection",
                             )
 
-                            hdr_left, hdr_right = st.columns([1.4, 1.0])
-                            with hdr_left:
-                                st.markdown("&nbsp;", unsafe_allow_html=True)
-                            with hdr_right:
-                                chosen_label = st.selectbox(
-                                    "Bid Adjustment (Manual Override)",
-                                    options=option_labels_tab4,
-                                    index=max(0, option_labels_tab4.index(cur_label)) if option_labels_tab4 else 0,
-                                    key=f"tab4_adj_select_{state_s}_{channel_s}",
-                                    help="Change bid adjustment for this state + channel. Saved immediately.",
-                                )
+                            safe_state = re.sub(r"[^A-Za-z0-9]+", "_", str(state_s))
+                            safe_channel = re.sub(r"[^A-Za-z0-9]+", "_", str(channel_s))
+                            safe_segment = re.sub(r"[^A-Za-z0-9]+", "_", str(segment_s))
+                            detail_shell_key = f"tab4_detail_shell_{safe_state}_{safe_channel}_{safe_segment}"
+                            with st.container(border=True, key=detail_shell_key):
+                                dleft, dright = st.columns([1.45, 1.0])
+                                with dleft:
+                                    st.markdown(f"**Details: {state_s} · {channel_s} · {segment_s}**")
+                                    st.caption(
+                                        f"State Strategy: {strategy_txt}  |  Recommended Bid Adjustment: {adj_txt}"
+                                    )
+                                    st.caption(f"Evidence: {sdet['Evidence Label'].iloc[0]}")
+                                with dright:
+                                    chosen_label = st.selectbox(
+                                        "Bid Adjustment (Manual Override)",
+                                        options=option_labels_tab4,
+                                        index=max(0, option_labels_tab4.index(cur_label)) if option_labels_tab4 else 0,
+                                        key=f"tab4_adj_select_{safe_state}_{safe_channel}",
+                                        help="Change bid adjustment for this state + channel. Saved immediately.",
+                                    )
 
                             chosen_adj = as_float(label_to_adj_tab4.get(chosen_label, effective_adj), effective_adj)
                             if not close_adj(chosen_adj, effective_adj):
@@ -3518,17 +3535,17 @@ def main() -> None:
                                 ok_save, err_save = save_overrides_to_disk(new_overrides)
                                 if ok_save:
                                     st.session_state["bid_overrides"] = new_overrides
-                                    st.session_state["tab4_save_notice"] = (
-                                        f"Saved manual adjustment for {state_s} · {channel_s}: {chosen_adj:+.0f}%"
-                                        if not close_adj(chosen_adj, rec_adj)
-                                        else f"Reset to platform recommendation for {state_s} · {channel_s}."
-                                    )
+                                    st.session_state["tab4_save_notice"] = "saved"
                                 else:
                                     st.session_state["tab4_save_notice"] = err_save or "Failed to save manual override."
                                 st.rerun()
 
                             if st.session_state.get("tab4_save_notice"):
-                                st.success(st.session_state.pop("tab4_save_notice"))
+                                msg = st.session_state.pop("tab4_save_notice")
+                                if str(msg).lower() == "saved":
+                                    st.caption("✓ Saved")
+                                else:
+                                    st.caption(f"⚠ {msg}")
 
                             seg_row = state_seg_df[
                                 (state_seg_df["State"] == state_s) & (state_seg_df["Segment"] == segment_s)
@@ -3554,16 +3571,6 @@ def main() -> None:
                             ch_wr = (ch_clicks / ch_bids) if ch_bids > 0 else np.nan
                             ch_sov = float(pd.to_numeric(ch_rows.get("SOV", np.nan), errors="coerce").mean()) if not ch_rows.empty else np.nan
 
-                            st.markdown(
-                                (
-                                    "<div class='px-detail-shell'>"
-                                    f"<div class='px-title'>Details: {state_s} · {channel_s} · {segment_s}</div>"
-                                    f"<div class='px-sub'>State Strategy: <b>{strategy_txt}</b> &nbsp;|&nbsp; Recommended Bid Adjustment: <b>{adj_txt}</b></div>"
-                                    f"<div class='px-sub'>Evidence: <b>{sdet['Evidence Label'].iloc[0]}</b></div>"
-                                    "</div>"
-                                ),
-                                unsafe_allow_html=True,
-                            )
                             st.markdown("<div class='px-subhead'>KPI Summary</div>", unsafe_allow_html=True)
                             render_kpi_tiles(
                                 [
