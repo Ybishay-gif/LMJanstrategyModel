@@ -3872,7 +3872,11 @@ def main() -> None:
             )
             for c in dim_cols:
                 if c in gdf.columns:
-                    gb.configure_column(c, rowGroup=(c in ["Product Strategy", "State"]), hide=(c in ["Product Strategy", "State"]))
+                    gb.configure_column(
+                        c,
+                        rowGroup=(c in ["Product Strategy", "State", "Channel Groups", "Testing Point"]),
+                        hide=(c in ["Product Strategy", "State", "Channel Groups", "Testing Point"]),
+                    )
             for c in metric_cols:
                 if c in gdf.columns:
                     agg = "sum" if c in ["Num Bids", "Num Impressions", "Cost", "Channel Clicks", "Channel Quotes", "State Binds"] else "avg"
@@ -3936,6 +3940,16 @@ def main() -> None:
                 ".ag-row-hover": {"background-color": "rgba(34,211,238,0.10) !important"},
                 ".ag-row-selected": {"background-color": "rgba(34,211,238,0.16) !important"},
                 ".ag-row-group": {"color": "#f8fafc", "font-weight": "700"},
+                ".ag-body-viewport": {"background-color": "#081225"},
+                ".ag-center-cols-viewport": {"background-color": "#081225"},
+                ".ag-center-cols-container": {"background-color": "#081225"},
+                ".ag-body-horizontal-scroll": {"background-color": "#0a1428"},
+                ".ag-body-vertical-scroll": {"background-color": "#0a1428"},
+                ".ag-body-horizontal-scroll-viewport": {"background-color": "#0a1428"},
+                ".ag-body-vertical-scroll-viewport": {"background-color": "#0a1428"},
+                ".ag-input-field-input": {"background-color": "#0b1730", "color": "#e2e8f0", "border": "1px solid rgba(45,212,191,0.28)"},
+                ".ag-text-field-input": {"background-color": "#0b1730", "color": "#e2e8f0", "border": "1px solid rgba(45,212,191,0.28)"},
+                "input[class*='ag-']": {"background-color": "#0b1730", "color": "#e2e8f0"},
                 ".ag-side-bar": {"background-color": "#081225", "border-left": "1px solid rgba(45,212,191,0.18)"},
                 ".ag-tool-panel-wrapper": {"background-color": "#081225", "color": "#cbd5e1"},
                 ".ag-tool-panel-wrapper *": {"color": "#cbd5e1"},
@@ -3944,12 +3958,16 @@ def main() -> None:
                 ".ag-paging-panel": {"background-color": "#081225", "color": "#cbd5e1"},
             }
             st.markdown("<div class='ga-shell'><div class='ga-note'>Drag dimensions in Columns panel to Row Groups / Columns / Values.</div>", unsafe_allow_html=True)
+            # Avoid a large blank area on load by sizing grid to visible grouped rows.
+            initial_group_rows = 8
+            row_px = 30
+            grid_height = max(320, min(780, 92 + initial_group_rows * row_px))
             AgGrid(
                 gdf,
                 gridOptions=go,
                 fit_columns_on_grid_load=False,
                 update_mode=GridUpdateMode.NO_UPDATE,
-                height=640,
+                height=grid_height,
                 enable_enterprise_modules=True,
                 theme="balham-dark" if dark_mode else "balham",
                 custom_css=custom_css,
