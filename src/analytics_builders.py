@@ -5,6 +5,80 @@ import streamlit as st
 from config import Settings, effective_cpc_cap_pct, mode_factor
 
 
+def _build_state_point_effects_for_detail(price_eval_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    pe = price_eval_df.copy()
+    if pe.empty or "State" not in pe.columns:
+        return pd.DataFrame()
+
+    st = (
+        pe.groupby(["State", "Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .agg(
+            Test_Bids=("Bids", "sum"),
+            Test_Clicks=("Clicks", "sum"),
+            **{"State Win Rate Uplift": ("Win Rate Lift %", "mean")},
+            **{"State CPC Uplift": ("CPC Lift %", "mean")},
+            **{"State Sig": ("Stat Sig Price Point", "max")},
+        )
+    )
+    ch = (
+        pe.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .agg(
+            **{"Channel Test Bids": ("Bids", "sum")},
+            **{"Channel Test Clicks": ("Clicks", "sum")},
+            **{"Channel Win Rate Uplift": ("Win Rate Lift %", "mean")},
+            **{"Channel CPC Uplift": ("CPC Lift %", "mean")},
+            **{"Channel Sig": ("Stat Sig Price Point", "max")},
+        )
+    )
+
+    out = st.merge(ch, on=["Channel Groups", "Price Adjustment Percent"], how="left")
+    out["State Sig"] = out["State Sig"].fillna(False).astype(bool)
+    out["Channel Sig"] = out["Channel Sig"].fillna(False).astype(bool)
+
+    use_state = out["State Sig"]
+    use_channel = (~use_state) & out["Channel Sig"]
+    out["Source Used"] = np.select(
+        [use_state, use_channel],
+        ["State+Channel", "Channel Fallback"],
+        default="No Sig",
+    )
+    out["Recommend_Eligible"] = use_state | use_channel
+    out["Win Rate Uplift"] = np.where(
+        use_state,
+        out["State Win Rate Uplift"],
+        np.where(use_channel, out["Channel Win Rate Uplift"], np.nan),
+    )
+    out["CPC Uplift"] = np.where(
+        use_state,
+        out["State CPC Uplift"],
+        np.where(use_channel, out["Channel CPC Uplift"], np.nan),
+    )
+    out["Evidence Bids"] = np.where(use_state, out["Test_Bids"], np.where(use_channel, out["Channel Test Bids"], out["Test_Bids"]))
+    out["Evidence Clicks"] = np.where(use_state, out["Test_Clicks"], np.where(use_channel, out["Channel Test Clicks"], out["Test_Clicks"]))
+
+    bids_sig = max(float(settings.min_bids_price_sig), 1.0)
+    clicks_sig = max(float(settings.min_clicks_price_sig), 1.0)
+    out["Sig_Score"] = np.minimum(
+        pd.to_numeric(out["Evidence Bids"], errors="coerce").fillna(0.0) / bids_sig,
+        pd.to_numeric(out["Evidence Clicks"], errors="coerce").fillna(0.0) / clicks_sig,
+    )
+    out["Sig Level"] = np.select(
+        [
+            out["Recommend_Eligible"] & (out["Sig_Score"] >= 2.5),
+            out["Recommend_Eligible"] & (out["Sig_Score"] >= 1.5),
+            out["Recommend_Eligible"],
+            (pd.to_numeric(out["Evidence Bids"], errors="coerce").fillna(0.0) > 0)
+            | (pd.to_numeric(out["Evidence Clicks"], errors="coerce").fillna(0.0) > 0),
+        ],
+        ["Strong", "Medium", "Weak", "Poor"],
+        default="No Sig",
+    )
+    out["Sig Icon"] = out["Sig Level"].map(
+        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
+    ).fillna("⚪")
+    return out
+
+
 def build_price_exploration_master_detail(
     rec_df: pd.DataFrame,
     price_eval_df: pd.DataFrame,
@@ -24,119 +98,16 @@ def build_price_exploration_master_detail(
     )
     base["SC Key"] = base["State"].astype(str) + "|" + base["Channel Groups"].astype(str)
 
-    pe = price_eval_df.copy()
-    if pe.empty:
+    cand = _build_state_point_effects_for_detail(price_eval_df, settings)
+    if cand.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    bids_sig = max(float(settings.min_bids_price_sig), 1.0)
-    clicks_sig = max(float(settings.min_clicks_price_sig), 1.0)
-    pe["Sig Score"] = np.minimum(pe["Bids"].fillna(0) / bids_sig, pe["Clicks"].fillna(0) / clicks_sig)
-    pe["Recommend Eligible"] = pe["Stat Sig Price Point"].fillna(False).astype(bool)
-    pe["Sig Level"] = np.select(
-        [
-            pe["Recommend Eligible"] & (pe["Sig Score"] >= 2.5),
-            pe["Recommend Eligible"] & (pe["Sig Score"] >= 1.5),
-            pe["Recommend Eligible"],
-            (pe["Bids"].fillna(0) > 0) | (pe["Clicks"].fillna(0) > 0),
-        ],
-        ["Strong", "Medium", "Weak", "Poor"],
-        default="No Sig",
+    detail_keys = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates().merge(
+        cand,
+        on=["State", "Channel Groups"],
+        how="left",
     )
-    pe["Sig Icon"] = pe["Sig Level"].map(
-        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
-    ).fillna("⚪")
-
-    grp_cols = ["Channel Groups", "Price Adjustment Percent"]
-    if "State" in pe.columns:
-        grp_cols = ["State", "Channel Groups", "Price Adjustment Percent"]
-
-    cand_state = pe.groupby(grp_cols, as_index=False).agg(
-        Test_Bids=("Bids", "sum"),
-        Test_Clicks=("Clicks", "sum"),
-        **{"Win Rate Uplift": ("Win Rate Lift %", "mean")},
-        **{"CPC Uplift": ("CPC Lift %", "mean")},
-        Sig_Score=("Sig Score", "mean"),
-        Recommend_Eligible=("Recommend Eligible", "max"),
-    )
-    cand_state["Sig Level"] = np.select(
-        [
-            cand_state["Recommend_Eligible"] & (cand_state["Sig_Score"] >= 2.5),
-            cand_state["Recommend_Eligible"] & (cand_state["Sig_Score"] >= 1.5),
-            cand_state["Recommend_Eligible"],
-            (cand_state["Test_Bids"].fillna(0) > 0) | (cand_state["Test_Clicks"].fillna(0) > 0),
-        ],
-        ["Strong", "Medium", "Weak", "Poor"],
-        default="No Sig",
-    )
-    cand_state["Sig Icon"] = cand_state["Sig Level"].map(
-        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
-    ).fillna("⚪")
-
-    if "State" in cand_state.columns:
-        cand_ch = cand_state.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False).agg(
-            Test_Bids=("Test_Bids", "sum"),
-            Test_Clicks=("Test_Clicks", "sum"),
-            **{"Win Rate Uplift": ("Win Rate Uplift", "mean")},
-            **{"CPC Uplift": ("CPC Uplift", "mean")},
-            Sig_Score=("Sig_Score", "mean"),
-            Recommend_Eligible=("Recommend_Eligible", "max"),
-        )
-        cand_ch["Sig Level"] = np.select(
-            [
-                cand_ch["Recommend_Eligible"] & (cand_ch["Sig_Score"] >= 2.5),
-                cand_ch["Recommend_Eligible"] & (cand_ch["Sig_Score"] >= 1.5),
-                cand_ch["Recommend_Eligible"],
-                (cand_ch["Test_Bids"].fillna(0) > 0) | (cand_ch["Test_Clicks"].fillna(0) > 0),
-            ],
-            ["Strong", "Medium", "Weak", "Poor"],
-            default="No Sig",
-        )
-        cand_ch["Sig Icon"] = cand_ch["Sig Level"].map(
-            {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
-        ).fillna("⚪")
-
-        state_pairs = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates()
-        merged_parts: list[pd.DataFrame] = []
-        for _, pr in state_pairs.iterrows():
-            st = pr["State"]
-            ch = pr["Channel Groups"]
-            sg = pr["Segment"]
-            sk = pr["SC Key"]
-            st_rows = cand_state[(cand_state["State"] == st) & (cand_state["Channel Groups"] == ch)].copy()
-            ch_rows = cand_ch[cand_ch["Channel Groups"] == ch].copy()
-
-            if st_rows.empty and ch_rows.empty:
-                continue
-
-            parts: list[pd.DataFrame] = []
-            if not st_rows.empty:
-                st_rows["Source Used"] = "State+Channel"
-                parts.append(st_rows)
-            if not ch_rows.empty:
-                st_adj = set(pd.to_numeric(st_rows.get("Price Adjustment Percent", pd.Series(dtype=float)), errors="coerce").dropna().astype(float).tolist())
-                ch_rows["Source Used"] = "Channel Fallback"
-                ch_rows = ch_rows[
-                    ~pd.to_numeric(ch_rows["Price Adjustment Percent"], errors="coerce").astype(float).isin(st_adj)
-                ].copy()
-                if not ch_rows.empty:
-                    parts.append(ch_rows)
-            if not parts:
-                continue
-            comb = pd.concat(parts, ignore_index=True)
-            comb["State"] = st
-            comb["Channel Groups"] = ch
-            comb["Segment"] = sg
-            comb["SC Key"] = sk
-            merged_parts.append(comb)
-        detail_keys = pd.concat(merged_parts, ignore_index=True) if merged_parts else pd.DataFrame()
-    else:
-        detail_keys = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates().merge(
-            cand_state,
-            on=["Channel Groups"],
-            how="left",
-        )
-        detail_keys = detail_keys[detail_keys["Price Adjustment Percent"].notna()].copy()
-        detail_keys["Source Used"] = "Channel"
+    detail_keys = detail_keys[detail_keys["Price Adjustment Percent"].notna()].copy()
 
     if detail_keys.empty:
         return pd.DataFrame(), pd.DataFrame()

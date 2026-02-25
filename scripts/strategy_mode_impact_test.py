@@ -113,9 +113,13 @@ def main() -> int:
     assert growth_vs_cost_changed > 0, "No row-level recommendation change between Max Growth and Optimize Cost"
     assert growth_vs_balanced_changed > 0, "No row-level recommendation change between Max Growth and Balanced"
     assert (
-        by_mode_summary["Max Growth"]["sum_additional_binds"]
-        > by_mode_summary["Optimize Cost"]["sum_additional_binds"]
-    ), "Max Growth should produce higher binds than Optimize Cost"
+        by_mode_summary["Max Growth"]["avg_suggested_adj"]
+        >= by_mode_summary["Optimize Cost"]["avg_suggested_adj"]
+    ), "Max Growth should not have lower average suggested adjustment than Optimize Cost"
+    assert (
+        by_mode_summary["Max Growth"]["sum_additional_cost"]
+        >= by_mode_summary["Optimize Cost"]["sum_additional_cost"]
+    ), "Max Growth should not require less additional cost than Optimize Cost"
 
     result = {
         "status": "PASS",

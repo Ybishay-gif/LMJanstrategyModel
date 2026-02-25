@@ -259,34 +259,94 @@ def strategy_min_adjustment(bucket: str, settings: Settings) -> float:
     return -25.0
 
 
-def _build_effect_dicts(price_eval_df: pd.DataFrame, settings: Settings) -> tuple[dict, dict]:
+def _build_state_point_effects(price_eval_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    """
+    Build one curve per State+Channel using only state-existing test points.
+    For weak/non-significant state test points, use uplift deltas from the same
+    adjustment point at channel level (if channel-level point is significant).
+    """
     px = price_eval_df.copy()
-    if "Stat Sig Price Point" in px.columns:
-        px = px[px["Stat Sig Price Point"] == True]
+    if px.empty or "State" not in px.columns:
+        return pd.DataFrame()
+
+    st = (
+        px.groupby(["State", "Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .agg(
+            Bids=("Bids", "sum"),
+            Clicks=("Clicks", "sum"),
+            **{"State Clicks Lift %": ("Clicks Lift %", "mean")},
+            **{"State Win Rate Lift %": ("Win Rate Lift %", "mean")},
+            **{"State CPC Lift %": ("CPC Lift %", "mean")},
+            **{"State Stat Sig Price Point": ("Stat Sig Price Point", "max")},
+            **{"Baseline SOV": ("Baseline SOV", "mean")},
+        )
+    )
+    ch = (
+        px.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .agg(
+            **{"Channel Bids": ("Bids", "sum")},
+            **{"Channel Clicks": ("Clicks", "sum")},
+            **{"Channel Clicks Lift %": ("Clicks Lift %", "mean")},
+            **{"Channel Win Rate Lift %": ("Win Rate Lift %", "mean")},
+            **{"Channel CPC Lift %": ("CPC Lift %", "mean")},
+            **{"Channel Stat Sig Price Point": ("Stat Sig Price Point", "max")},
+        )
+    )
+
+    out = st.merge(ch, on=["Channel Groups", "Price Adjustment Percent"], how="left")
+    out["State Stat Sig Price Point"] = out["State Stat Sig Price Point"].fillna(False).astype(bool)
+    out["Channel Stat Sig Price Point"] = out["Channel Stat Sig Price Point"].fillna(False).astype(bool)
+
+    use_state = out["State Stat Sig Price Point"]
+    use_channel = (~use_state) & out["Channel Stat Sig Price Point"]
+    out["Source Used"] = np.select(
+        [use_state, use_channel],
+        ["State+Channel", "Channel Fallback"],
+        default="No Sig",
+    )
+    out["Stat Sig Price Point"] = use_state | use_channel
+
+    out["Clicks Lift %"] = np.where(
+        use_state,
+        out["State Clicks Lift %"],
+        np.where(use_channel, out["Channel Clicks Lift %"], np.nan),
+    )
+    out["Win Rate Lift %"] = np.where(
+        use_state,
+        out["State Win Rate Lift %"],
+        np.where(use_channel, out["Channel Win Rate Lift %"], np.nan),
+    )
+    out["CPC Lift %"] = np.where(
+        use_state,
+        out["State CPC Lift %"],
+        np.where(use_channel, out["Channel CPC Lift %"], np.nan),
+    )
+    out["Test Bids"] = np.where(use_state, out["Bids"], np.where(use_channel, out["Channel Bids"], out["Bids"]))
+    out["Test Clicks"] = np.where(use_state, out["Clicks"], np.where(use_channel, out["Channel Clicks"], out["Clicks"]))
+
+    out["Growth Opportunity Score"] = (
+        0.70 * pd.to_numeric(out["Win Rate Lift %"], errors="coerce").fillna(0.0)
+        + 0.30 * (1 - pd.to_numeric(out["Baseline SOV"], errors="coerce").fillna(0.5))
+        - effective_cpc_penalty(settings) * np.maximum(pd.to_numeric(out["CPC Lift %"], errors="coerce").fillna(0.0), 0.0)
+    )
+    out.loc[~out["Stat Sig Price Point"], "Growth Opportunity Score"] = 0.0
+    return out
+
+
+def _build_effect_dicts(price_eval_df: pd.DataFrame, settings: Settings) -> tuple[dict, dict]:
+    px = _build_state_point_effects(price_eval_df, settings)
+    if px.empty:
+        return {}, {}
+    px = px[px["Stat Sig Price Point"] == True].copy()
     if "CPC Lift %" in px.columns:
         px = px[px["CPC Lift %"].fillna(0) <= effective_cpc_cap_pct(settings) / 100.0]
 
-    state_dict: dict[tuple[str, str], pd.DataFrame] = {}
-    if "State" in px.columns:
-        st_eff = (
-            px[["State", "Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
-            .groupby(["State", "Channel Groups", "Price Adjustment Percent"], as_index=False)
-            .mean(numeric_only=True)
-        )
-        state_dict = {
-            (str(st), str(ch)): g.sort_values("Price Adjustment Percent")
-            for (st, ch), g in st_eff.groupby(["State", "Channel Groups"])
-        }
-
-    ch_eff = (
-        px[["Channel Groups", "Price Adjustment Percent", "Clicks Lift %", "Win Rate Lift %", "CPC Lift %"]]
-        .groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
-        .mean(numeric_only=True)
-    )
-    channel_dict: dict[str, pd.DataFrame] = {
-        str(ch): g.sort_values("Price Adjustment Percent") for ch, g in ch_eff.groupby("Channel Groups")
+    state_dict: dict[tuple[str, str], pd.DataFrame] = {
+        (str(st), str(ch)): g.sort_values("Price Adjustment Percent")
+        for (st, ch), g in px.groupby(["State", "Channel Groups"])
     }
-    return state_dict, channel_dict
+    # Rule: only state-existing test points are eligible. No synthetic channel-only points.
+    return state_dict, {}
 
 
 def _assign_best_price_points(
@@ -295,19 +355,14 @@ def _assign_best_price_points(
     settings: Settings,
     strategy_profiles: Optional[dict] = None,
 ) -> pd.DataFrame:
-    px = price_eval_df.copy()
-    if "Stat Sig Price Point" in px.columns:
-        px = px[px["Stat Sig Price Point"] == True]
+    px = _build_state_point_effects(price_eval_df, settings)
     if "CPC Lift %" in px.columns:
         px = px[px["CPC Lift %"].notna()]
 
-    state_curves: dict[tuple[str, str], pd.DataFrame] = {}
-    if "State" in px.columns:
-        state_curves = {
-            (str(st), str(ch)): g.sort_values("Price Adjustment Percent")
-            for (st, ch), g in px.groupby(["State", "Channel Groups"])
-        }
-    ch_curves = {str(ch): g.sort_values("Price Adjustment Percent") for ch, g in px.groupby("Channel Groups")}
+    state_curves: dict[tuple[str, str], pd.DataFrame] = {
+        (str(st), str(ch)): g.sort_values("Price Adjustment Percent")
+        for (st, ch), g in px.groupby(["State", "Channel Groups"])
+    }
 
     strategy_profiles = normalize_strategy_profiles(strategy_profiles or {})
 
@@ -315,6 +370,9 @@ def _assign_best_price_points(
         if curve is None or curve.empty:
             return None
         curve = curve.copy()
+        curve = curve[curve["Stat Sig Price Point"].fillna(False).astype(bool)]
+        if curve.empty:
+            return None
         bucket = str(row.get("Strategy Bucket", "") or "")
         prof = strategy_profiles.get(bucket, DEFAULT_STRATEGY_PROFILES.get(bucket, DEFAULT_STRATEGY_PROFILES["Minimal Growth"]))
         row_mode = strategy_profile_mode(prof.get("growth_vs_cost", 0.5))
@@ -492,33 +550,18 @@ def _assign_best_price_points(
         )[0]
         return best["cand"]
 
+    def _closest_existing_adj(curve: Optional[pd.DataFrame]) -> float:
+        if curve is None or curve.empty or "Price Adjustment Percent" not in curve.columns:
+            return 0.0
+        vals = pd.to_numeric(curve["Price Adjustment Percent"], errors="coerce").dropna()
+        if vals.empty:
+            return 0.0
+        # Use the closest available tested point to baseline; do not synthesize new points.
+        return float(vals.iloc[(vals.abs()).argmin()])
+
     def _lookup(row: pd.Series) -> pd.Series:
         key_sc = (str(row.get("State", "")), str(row.get("Channel Groups", "")))
         srow = _pick_from_curve(state_curves.get(key_sc), row)
-        crow = _pick_from_curve(ch_curves.get(str(row.get("Channel Groups", ""))), row)
-        if srow is not None and crow is not None:
-            s_adj = float(srow.get("Price Adjustment Percent", 0.0) or 0.0)
-            c_adj = float(crow.get("Price Adjustment Percent", 0.0) or 0.0)
-            s_wr = as_float(srow.get("Win Rate Lift %", 0.0), 0.0)
-            c_wr = as_float(crow.get("Win Rate Lift %", 0.0), 0.0)
-            s_cpc = as_float(srow.get("CPC Lift %", 0.0), 0.0)
-            c_cpc = as_float(crow.get("CPC Lift %", 0.0), 0.0)
-            mode = str(settings.optimization_mode or "Balanced")
-
-            # Growth-first state-vs-fallback resolver:
-            # prefer higher win-rate uplift unless CPC becomes materially worse.
-            if mode in {"Max Growth", "Growth Leaning", "Balanced"}:
-                wr_gain = c_wr - s_wr
-                cpc_delta = c_cpc - s_cpc
-                if (wr_gain > 0 and cpc_delta <= 0.10) or (wr_gain >= 0.02):
-                    srow = crow
-                elif abs(wr_gain) <= 0.01 and cpc_delta < -0.05:
-                    srow = crow
-
-            # If state-level has only baseline while channel-level has a valid non-zero
-            # point, prefer the channel fallback in growth/balanced modes.
-            if abs(s_adj) <= 1e-9 and abs(c_adj) > 1e-9 and mode_factor(settings.optimization_mode) >= 0.5:
-                srow = crow
         if srow is not None:
             return pd.Series(
                 [
@@ -530,18 +573,8 @@ def _assign_best_price_points(
                     True,
                 ]
             )
-        if crow is not None:
-            return pd.Series(
-                [
-                    crow.get("Price Adjustment Percent", 0.0),
-                    crow.get("Growth Opportunity Score", 0.0),
-                    crow.get("Clicks Lift %", 0.0),
-                    crow.get("CPC Lift %", 0.0),
-                    crow.get("Win Rate Lift %", 0.0),
-                    True,
-                ]
-            )
-        return pd.Series([0.0, 0.0, 0.0, 0.0, 0.0, False])
+        fallback_adj = _closest_existing_adj(state_curves.get(key_sc))
+        return pd.Series([fallback_adj, 0.0, 0.0, 0.0, 0.0, False])
 
     out = rec.copy()
     mapped = out.apply(_lookup, axis=1)
@@ -1156,54 +1189,33 @@ def stat_sig_level(bids: float, clicks: float, settings: Settings) -> tuple[str,
 
 @st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
 def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel_group: str, settings: Settings) -> tuple[pd.DataFrame, str]:
-    p = price_eval_df.copy()
-    p = p[p["Channel Groups"] == channel_group].copy()
+    p = _build_state_point_effects(price_eval_df, settings)
+    p = p[
+        (p["State"].astype(str) == str(state))
+        & (p["Channel Groups"].astype(str) == str(channel_group))
+    ].copy()
     if p.empty:
         return pd.DataFrame(), "None"
-    if p.empty:
-        return pd.DataFrame(), "None"
-
-    src = "Channel"
-    if "State" in p.columns:
-        ps = p[p["State"] == state].copy()
-        pch = (
-            p.groupby(["Price Adjustment Percent"], as_index=False)
-            .agg(
-                Bids=("Bids", "sum"),
-                Clicks=("Clicks", "sum"),
-                **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
-                **{"CPC Lift %": ("CPC Lift %", "mean")},
-                **{"Stat Sig Price Point": ("Stat Sig Price Point", "max")},
-            )
-            .sort_values("Price Adjustment Percent")
-        )
-        if not ps.empty:
-            ps = ps.sort_values("Price Adjustment Percent").copy()
-            ps["Source Used"] = "State+Channel"
-            pch["Source Used"] = "Channel Fallback"
-            ps_adj = set(pd.to_numeric(ps["Price Adjustment Percent"], errors="coerce").dropna().astype(float).tolist())
-            pch_missing = pch[~pd.to_numeric(pch["Price Adjustment Percent"], errors="coerce").astype(float).isin(ps_adj)].copy()
-            p = pd.concat([ps, pch_missing], ignore_index=True)
-            src = "Mixed" if not pch_missing.empty else "State+Channel"
-        else:
-            p = pch
-            p["Source Used"] = "Channel Fallback"
-            src = "Channel Fallback"
 
     if "Bids" not in p.columns:
         p["Bids"] = np.nan
     if "Clicks" not in p.columns:
         p["Clicks"] = np.nan
 
-    sig_vals = p.apply(lambda r: stat_sig_level(r.get("Bids", 0), r.get("Clicks", 0), settings), axis=1)
-    p["Sig Score"] = sig_vals.map(lambda x: x[2])
+    evidence_bids = pd.to_numeric(p.get("Test Bids", p.get("Bids", 0)), errors="coerce").fillna(0.0)
+    evidence_clicks = pd.to_numeric(p.get("Test Clicks", p.get("Clicks", 0)), errors="coerce").fillna(0.0)
+    sig_vals = pd.DataFrame(
+        [stat_sig_level(b, c, settings) for b, c in zip(evidence_bids, evidence_clicks)],
+        columns=["_sig_level", "_sig_icon", "_sig_score"],
+        index=p.index,
+    )
+    p["Sig Score"] = sig_vals["_sig_score"]
     p["Recommend Eligible"] = p.get("Stat Sig Price Point", False).fillna(False).astype(bool)
     p["Sig Level"] = np.where(
         p["Recommend Eligible"],
-        sig_vals.map(lambda x: x[0]),
+        sig_vals["_sig_level"],
         np.where(
-            (pd.to_numeric(p.get("Bids", 0), errors="coerce").fillna(0) > 0)
-            | (pd.to_numeric(p.get("Clicks", 0), errors="coerce").fillna(0) > 0),
+            (evidence_bids > 0) | (evidence_clicks > 0),
             "Poor",
             "No Sig",
         ),
@@ -1211,9 +1223,8 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     p["Sig Icon"] = p["Sig Level"].map(
         {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
     ).fillna("⚪")
-    if "Source Used" not in p.columns:
-        p["Source Used"] = src
     p = p.sort_values("Price Adjustment Percent")
+    src = "Mixed" if p["Source Used"].nunique() > 1 else str(p["Source Used"].iloc[0])
     return p, src
 
 
@@ -1250,59 +1261,22 @@ def precompute_popup_options_all(
     if base.empty or price_eval_df.empty:
         return pd.DataFrame()
 
-    px = price_eval_df.copy()
-    cols = ["State", "Channel Groups", "Price Adjustment Percent", "Bids", "Clicks", "Win Rate Lift %", "CPC Lift %", "Stat Sig Price Point"]
-    px = px[[c for c in cols if c in px.columns]].copy()
-
-    st_cand = (
-        px.groupby(["State", "Channel Groups", "Price Adjustment Percent"], as_index=False)
-        .agg(
-            Bids=("Bids", "sum"),
-            Clicks=("Clicks", "sum"),
-            **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
-            **{"CPC Lift %": ("CPC Lift %", "mean")},
-            **{"Stat Sig Price Point": ("Stat Sig Price Point", "max")},
-        )
-    )
-    ch_cand = (
-        px.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
-        .agg(
-            Bids=("Bids", "sum"),
-            Clicks=("Clicks", "sum"),
-            **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
-            **{"CPC Lift %": ("CPC Lift %", "mean")},
-            **{"Stat Sig Price Point": ("Stat Sig Price Point", "max")},
-        )
-    )
-
-    pairs = base[["State", "Channel Groups"]].drop_duplicates()
-    st_rows = pairs.merge(st_cand, on=["State", "Channel Groups"], how="left")
-    st_rows = st_rows[st_rows["Price Adjustment Percent"].notna()].copy()
-    st_rows["Source Used"] = "State+Channel"
-
-    fb_rows = pairs.merge(ch_cand, on=["Channel Groups"], how="left")
-    fb_rows = fb_rows[fb_rows["Price Adjustment Percent"].notna()].copy()
-    if not st_rows.empty:
-        keys = st_rows[["State", "Channel Groups", "Price Adjustment Percent"]].copy()
-        keys["_hit"] = 1
-        fb_rows = fb_rows.merge(keys, on=["State", "Channel Groups", "Price Adjustment Percent"], how="left")
-        fb_rows = fb_rows[fb_rows["_hit"].isna()].drop(columns=["_hit"])
-    fb_rows["Source Used"] = "Channel Fallback"
-
-    cand = pd.concat([st_rows, fb_rows], ignore_index=True)
+    cand = _build_state_point_effects(price_eval_df, settings).copy()
     if cand.empty:
         return pd.DataFrame()
 
+    evidence_bids = pd.to_numeric(cand.get("Test Bids", cand.get("Bids", 0)), errors="coerce").fillna(0.0)
+    evidence_clicks = pd.to_numeric(cand.get("Test Clicks", cand.get("Clicks", 0)), errors="coerce").fillna(0.0)
     bids_sig = max(float(settings.min_bids_price_sig), 1.0)
     clicks_sig = max(float(settings.min_clicks_price_sig), 1.0)
-    cand["Sig Score"] = np.minimum(cand["Bids"].fillna(0) / bids_sig, cand["Clicks"].fillna(0) / clicks_sig)
+    cand["Sig Score"] = np.minimum(evidence_bids / bids_sig, evidence_clicks / clicks_sig)
     cand["Recommend Eligible"] = cand.get("Stat Sig Price Point", False).fillna(False).astype(bool)
     cand["Sig Level"] = np.select(
         [
             cand["Recommend Eligible"] & (cand["Sig Score"] >= 2.5),
             cand["Recommend Eligible"] & (cand["Sig Score"] >= 1.5),
             cand["Recommend Eligible"],
-            (cand["Bids"].fillna(0) > 0) | (cand["Clicks"].fillna(0) > 0),
+            (evidence_bids > 0) | (evidence_clicks > 0),
         ],
         ["Strong", "Medium", "Weak", "Poor"],
         default="No Sig",
@@ -1335,14 +1309,13 @@ def precompute_popup_options_all(
     out = merged.rename(
         columns={
             "Price Adjustment Percent": "Bid Adj %",
-            "Bids": "Test Bids",
             "Win Rate Lift %": "Win Rate Uplift",
             "CPC Lift %": "CPC Uplift",
         }
     )
     keep = [
         "State", "Channel Groups", "Bid Adj %", "Sig Icon", "Sig Level", "Source Used",
-        "Test Bids", "Win Rate Uplift", "CPC Uplift", "Additional Clicks", "Additional Binds",
+        "Bids", "Clicks", "Test Bids", "Test Clicks", "Win Rate Uplift", "CPC Uplift", "Additional Clicks", "Additional Binds",
         "Expected Total Cost", "Additional Budget Needed", "CPB Impact", "Recommend Eligible",
     ]
     out = out[[c for c in keep if c in out.columns]].copy()
@@ -1787,7 +1760,19 @@ def build_performance_tiers(rec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     return summary, detail
 
 
-def main() -> None:
+VIEW_TO_LABEL = {
+    "tab0": "🏁 Tab 0: Executive State View",
+    "settings": "⚙️ Plan Settings",
+    "tab1": "🗺️ Tab 1: State Momentum Map",
+    "tab2": "📊 Tab 2: Channel Group Analysis",
+    "tab3": "🧠 Tab 3: Channel Group and States",
+    "tab4": "🧪 Tab 4: Price Exploration Details",
+    "tab5": "📚 Tab 5: General Analytics",
+    "neon": "🌌 Neon Insights Cockpit",
+}
+
+
+def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> None:
     if not render_auth_gate():
         return
 
@@ -1862,6 +1847,22 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    tab_labels = list(VIEW_TO_LABEL.values())
+    if forced_view:
+        selected_tab = VIEW_TO_LABEL.get(str(forced_view), VIEW_TO_LABEL["tab0"])
+        st.session_state["main_view_tab"] = selected_tab
+    elif multipage_mode:
+        selected_tab = st.session_state.get("main_view_tab", VIEW_TO_LABEL["tab0"])
+        if selected_tab not in tab_labels:
+            selected_tab = VIEW_TO_LABEL["tab0"]
+            st.session_state["main_view_tab"] = selected_tab
+    else:
+        selected_tab = st.radio(
+            "View",
+            options=tab_labels,
+            horizontal=True,
+            key="main_view_tab",
+        )
 
     with st.sidebar:
         st.header("Data Paths")
@@ -1969,6 +1970,17 @@ def main() -> None:
     _ = run
     strategy_profiles = normalize_strategy_profiles(load_strategy_profiles())
 
+    # Page-scoped lazy data loading: Plan Settings uses lightweight inputs only.
+    is_plan_settings = selected_tab == VIEW_TO_LABEL["settings"]
+    rec_df = pd.DataFrame()
+    rec_df_model = pd.DataFrame()
+    state_df = pd.DataFrame()
+    state_seg_df = pd.DataFrame()
+    price_eval = pd.DataFrame()
+    state_extra_df = pd.DataFrame()
+    state_seg_extra_df = pd.DataFrame()
+    channel_summary_df = pd.DataFrame()
+
     try:
         base_strategy_df = pd.DataFrame(columns=["State", "Strategy Bucket"])
         if data_mode == "Repo data (GitHub)":
@@ -1979,110 +1991,165 @@ def main() -> None:
             price_path = DEFAULT_PATHS["channel_price_exp"]
             channel_state_path = DEFAULT_PATHS["channel_state"]
             base_strategy_df = read_state_strategy(strategy_path)
-            mtimes = (
-                file_mtime(strategy_path),
-                file_mtime(state_path),
-                file_mtime(state_seg_path),
-                file_mtime(channel_group_path),
-                file_mtime(price_path),
-                file_mtime(channel_state_path),
-                file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
-                file_mtime(str(STRATEGY_PROFILES_PATH)),
-            )
-            rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
-                strategy_path,
-                state_path,
-                state_seg_path,
-                channel_group_path,
-                price_path,
-                channel_state_path,
-                settings,
-                strategy_profiles,
-                mtimes,
-            )
+            if is_plan_settings:
+                strategy_df_eff = apply_strategy_overrides(base_strategy_df.copy(), load_state_strategy_overrides())
+                state_raw = read_csv(state_path)
+                state_states = (
+                    normalize_columns(state_raw).get("State", pd.Series(dtype=object)).astype(str).str.upper().tolist()
+                    if isinstance(state_raw, pd.DataFrame)
+                    else []
+                )
+                strategy_states = strategy_df_eff.get("State", pd.Series(dtype=object)).astype(str).str.upper().tolist()
+                all_states = sorted(set([s for s in (state_states + strategy_states) if s and s != "NAN"]))
+                map_eff = (
+                    strategy_df_eff[["State", "Strategy Bucket"]]
+                    .dropna()
+                    .assign(State=lambda d: d["State"].astype(str).str.upper())
+                    .drop_duplicates("State")
+                    .set_index("State")["Strategy Bucket"]
+                    .to_dict()
+                )
+                state_df = pd.DataFrame(
+                    {"State": all_states, "Strategy Bucket": [map_eff.get(s, "") for s in all_states]}
+                )
+            else:
+                mtimes = (
+                    file_mtime(strategy_path),
+                    file_mtime(state_path),
+                    file_mtime(state_seg_path),
+                    file_mtime(channel_group_path),
+                    file_mtime(price_path),
+                    file_mtime(channel_state_path),
+                    file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
+                    file_mtime(str(STRATEGY_PROFILES_PATH)),
+                )
+                rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
+                    strategy_path,
+                    state_path,
+                    state_seg_path,
+                    channel_group_path,
+                    price_path,
+                    channel_state_path,
+                    settings,
+                    strategy_profiles,
+                    mtimes,
+                )
         elif data_mode == "Upload files (Cloud)":
-            required_uploads = [
-                strategy_upload, state_upload, state_seg_upload,
-                channel_group_upload, price_upload, channel_state_upload,
-            ]
-            if any(x is None for x in required_uploads):
-                st.error("Please upload all six files in the sidebar, then click Run.")
-                return
+            if is_plan_settings:
+                if strategy_upload is None or state_upload is None:
+                    st.error("Please upload `State strategy file` and `State data CSV` in the sidebar.")
+                    return
+                strategy_text = strategy_upload.getvalue().decode("utf-8", errors="ignore")
+                base_strategy_df = parse_state_strategy_text(strategy_text)
+                strategy_df_eff = apply_strategy_overrides(base_strategy_df.copy(), load_state_strategy_overrides())
+                state_raw = pd.read_csv(state_upload)
+                state_states = (
+                    normalize_columns(state_raw).get("State", pd.Series(dtype=object)).astype(str).str.upper().tolist()
+                    if isinstance(state_raw, pd.DataFrame)
+                    else []
+                )
+                strategy_states = strategy_df_eff.get("State", pd.Series(dtype=object)).astype(str).str.upper().tolist()
+                all_states = sorted(set([s for s in (state_states + strategy_states) if s and s != "NAN"]))
+                map_eff = (
+                    strategy_df_eff[["State", "Strategy Bucket"]]
+                    .dropna()
+                    .assign(State=lambda d: d["State"].astype(str).str.upper())
+                    .drop_duplicates("State")
+                    .set_index("State")["Strategy Bucket"]
+                    .to_dict()
+                )
+                state_df = pd.DataFrame(
+                    {"State": all_states, "Strategy Bucket": [map_eff.get(s, "") for s in all_states]}
+                )
+            else:
+                required_uploads = [
+                    strategy_upload, state_upload, state_seg_upload,
+                    channel_group_upload, price_upload, channel_state_upload,
+                ]
+                if any(x is None for x in required_uploads):
+                    st.error("Please upload all six files in the sidebar, then click Run.")
+                    return
 
-            strategy_text = strategy_upload.getvalue().decode("utf-8", errors="ignore")
-            strategy_df = parse_state_strategy_text(strategy_text)
-            base_strategy_df = strategy_df.copy()
-            strategy_df = apply_strategy_overrides(strategy_df, load_state_strategy_overrides())
-            state_raw = pd.read_csv(state_upload)
-            state_seg_raw = pd.read_csv(state_seg_upload)
-            _ = pd.read_csv(channel_group_upload)
-            price_raw = pd.read_csv(price_upload)
-            channel_state_raw = pd.read_csv(channel_state_upload)
-            state_df = prepare_state(state_raw, strategy_df, settings)
-            state_seg_df = prepare_state_seg(state_seg_raw, state_raw, settings)
-            channel_state_df = prepare_channel_state(channel_state_raw)
-            price_eval, best_adj = prepare_price_exploration(price_raw, settings)
-            rec_df, state_extra_df, state_seg_extra_df, _ = build_model_tables(
-                state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings, strategy_profiles
-            )
+                strategy_text = strategy_upload.getvalue().decode("utf-8", errors="ignore")
+                strategy_df = parse_state_strategy_text(strategy_text)
+                base_strategy_df = strategy_df.copy()
+                strategy_df = apply_strategy_overrides(strategy_df, load_state_strategy_overrides())
+                state_raw = pd.read_csv(state_upload)
+                state_seg_raw = pd.read_csv(state_seg_upload)
+                _ = pd.read_csv(channel_group_upload)
+                price_raw = pd.read_csv(price_upload)
+                channel_state_raw = pd.read_csv(channel_state_upload)
+                state_df = prepare_state(state_raw, strategy_df, settings)
+                state_seg_df = prepare_state_seg(state_seg_raw, state_raw, settings)
+                channel_state_df = prepare_channel_state(channel_state_raw)
+                price_eval, best_adj = prepare_price_exploration(price_raw, settings)
+                rec_df, state_extra_df, state_seg_extra_df, _ = build_model_tables(
+                    state_df, state_seg_df, channel_state_df, best_adj, price_eval, settings, strategy_profiles
+                )
         else:
             base_strategy_df = read_state_strategy(strategy_path)
-            mtimes = (
-                file_mtime(strategy_path),
-                file_mtime(state_path),
-                file_mtime(state_seg_path),
-                file_mtime(channel_group_path),
-                file_mtime(price_path),
-                file_mtime(channel_state_path),
-                file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
-                file_mtime(str(STRATEGY_PROFILES_PATH)),
-            )
-            rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
-                strategy_path,
-                state_path,
-                state_seg_path,
-                channel_group_path,
-                price_path,
-                channel_state_path,
-                settings,
-                strategy_profiles,
-                mtimes,
-            )
+            if is_plan_settings:
+                strategy_df_eff = apply_strategy_overrides(base_strategy_df.copy(), load_state_strategy_overrides())
+                state_raw = read_csv(state_path)
+                state_states = (
+                    normalize_columns(state_raw).get("State", pd.Series(dtype=object)).astype(str).str.upper().tolist()
+                    if isinstance(state_raw, pd.DataFrame)
+                    else []
+                )
+                strategy_states = strategy_df_eff.get("State", pd.Series(dtype=object)).astype(str).str.upper().tolist()
+                all_states = sorted(set([s for s in (state_states + strategy_states) if s and s != "NAN"]))
+                map_eff = (
+                    strategy_df_eff[["State", "Strategy Bucket"]]
+                    .dropna()
+                    .assign(State=lambda d: d["State"].astype(str).str.upper())
+                    .drop_duplicates("State")
+                    .set_index("State")["Strategy Bucket"]
+                    .to_dict()
+                )
+                state_df = pd.DataFrame(
+                    {"State": all_states, "Strategy Bucket": [map_eff.get(s, "") for s in all_states]}
+                )
+            else:
+                mtimes = (
+                    file_mtime(strategy_path),
+                    file_mtime(state_path),
+                    file_mtime(state_seg_path),
+                    file_mtime(channel_group_path),
+                    file_mtime(price_path),
+                    file_mtime(channel_state_path),
+                    file_mtime(str(STATE_STRATEGY_OVERRIDES_PATH)),
+                    file_mtime(str(STRATEGY_PROFILES_PATH)),
+                )
+                rec_df, state_df, state_seg_df, price_eval, state_extra_df, state_seg_extra_df = build_all_from_paths(
+                    strategy_path,
+                    state_path,
+                    state_seg_path,
+                    channel_group_path,
+                    price_path,
+                    channel_state_path,
+                    settings,
+                    strategy_profiles,
+                    mtimes,
+                )
     except Exception as exc:
         st.error(f"Failed to load data: {exc}")
         return
 
-    rec_df_model = rec_df.copy()
-    if "bid_overrides" not in st.session_state:
-        st.session_state["bid_overrides"] = load_overrides_from_disk()
-    active_manual_overrides = sum(
-        1
-        for v in st.session_state["bid_overrides"].values()
-        if isinstance(v, dict) and v.get("apply", False)
-    )
-    rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
-    state_extra_df, state_seg_extra_df, channel_summary_df = summarize_from_rec(rec_df)
-    if active_manual_overrides > 0:
-        st.caption(
-            f"Manual overrides active: {active_manual_overrides}. These rows are locked to manual price-adjustment and may not change with Recommendation Strategy."
+    if not is_plan_settings:
+        rec_df_model = rec_df.copy()
+        if "bid_overrides" not in st.session_state:
+            st.session_state["bid_overrides"] = load_overrides_from_disk()
+        active_manual_overrides = sum(
+            1
+            for v in st.session_state["bid_overrides"].values()
+            if isinstance(v, dict) and v.get("apply", False)
         )
-
-    tab_labels = [
-        "🏁 Tab 0: Executive State View",
-        "⚙️ Plan Settings",
-        "🗺️ Tab 1: State Momentum Map",
-        "📊 Tab 2: Channel Group Analysis",
-        "🧠 Tab 3: Channel Group and States",
-        "🧪 Tab 4: Price Exploration Details",
-        "📚 Tab 5: General Analytics",
-        "🌌 Neon Insights Cockpit",
-    ]
-    selected_tab = st.radio(
-        "View",
-        options=tab_labels,
-        horizontal=True,
-        key="main_view_tab",
-    )
+        rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
+        state_extra_df, state_seg_extra_df, channel_summary_df = summarize_from_rec(rec_df)
+        if active_manual_overrides > 0:
+            st.caption(
+                f"Manual overrides active: {active_manual_overrides}. These rows are locked to manual price-adjustment and may not change with Recommendation Strategy."
+            )
 
     if selected_tab == tab_labels[0]:
         map_df0 = state_df.merge(state_extra_df, on="State", how="left")
@@ -2130,8 +2197,11 @@ def main() -> None:
         h1, h2 = st.columns([0.95, 0.05])
         h1.markdown("### Product Strategy Analysis")
         if h2.button("✏️", key="tab0_open_editor_icon", help="Open Plan Settings"):
-            st.session_state["main_view_tab"] = plan_settings_tab
-            st.rerun()
+            if multipage_mode:
+                st.switch_page("pages/02_Plan_Settings.py")
+            else:
+                st.session_state["main_view_tab"] = plan_settings_tab
+                st.rerun()
 
         render_kpi_tiles(
             [
