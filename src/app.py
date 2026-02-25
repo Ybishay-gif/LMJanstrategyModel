@@ -314,13 +314,56 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
         valid = [x for x in scored if x["perf_ok"]]
         pool = valid if valid else scored
         if pool:
-            if settings.optimization_mode == "Max Growth" and bucket == "Strongest Momentum":
+            mode = str(settings.optimization_mode or "Balanced")
+            if mode == "Max Growth":
                 best = sorted(
                     pool,
-                    key=lambda x: (x["wr_lift"], x["add_binds"], -x["cpc_lift"], x["adj"]),
+                    key=lambda x: (
+                        x["wr_lift"],
+                        x["add_binds"],
+                        -max(x["cpc_lift"], 0.0),
+                        x["adj"],
+                    ),
                     reverse=True,
                 )[0]
                 return best["cand"]
+            if mode == "Growth Leaning":
+                best = sorted(
+                    pool,
+                    key=lambda x: (
+                        1.25 * x["wr_lift"] + 0.45 * x["add_binds"] - 0.35 * max(x["cpc_lift"], 0.0) + 0.15 * x["perf_gain"],
+                        x["wr_lift"],
+                        x["add_binds"],
+                        -x["cpc_lift"],
+                    ),
+                    reverse=True,
+                )[0]
+                return best["cand"]
+            if mode == "Cost Leaning":
+                best = sorted(
+                    pool,
+                    key=lambda x: (
+                        0.95 * max(-x["cpc_lift"], 0.0) - 0.65 * max(x["cpc_lift"], 0.0) + 0.35 * x["perf_gain"] + 0.15 * x["wr_lift"] - 0.02 * abs(x["adj"]),
+                        x["perf_gain"],
+                        -max(x["cpc_lift"], 0.0),
+                        x["wr_lift"],
+                    ),
+                    reverse=True,
+                )[0]
+                return best["cand"]
+            if mode == "Optimize Cost":
+                best = sorted(
+                    pool,
+                    key=lambda x: (
+                        max(x["cpc_lift"], 0.0),
+                        -max(-x["cpc_lift"], 0.0),
+                        abs(x["adj"]),
+                        -x["wr_lift"],
+                        -x["add_binds"],
+                    ),
+                )[0]
+                return best["cand"]
+            # Balanced (default)
             best = sorted(
                 pool,
                 key=lambda x: (x["utility"], x["wr_lift"], x["add_binds"], -x["cpc_lift"]),
@@ -1732,8 +1775,17 @@ def main() -> None:
     rec_df_model = rec_df.copy()
     if "bid_overrides" not in st.session_state:
         st.session_state["bid_overrides"] = load_overrides_from_disk()
+    active_manual_overrides = sum(
+        1
+        for v in st.session_state["bid_overrides"].values()
+        if isinstance(v, dict) and v.get("apply", False)
+    )
     rec_df = apply_user_bid_overrides(rec_df, price_eval, settings, st.session_state["bid_overrides"])
     state_extra_df, state_seg_extra_df, channel_summary_df = summarize_from_rec(rec_df)
+    if active_manual_overrides > 0:
+        st.caption(
+            f"Manual overrides active: {active_manual_overrides}. These rows are locked to manual price-adjustment and may not change with Recommendation Strategy."
+        )
 
     tab_labels = [
         "🏁 Tab 0: Executive State View",
