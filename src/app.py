@@ -1475,7 +1475,7 @@ def main() -> None:
         return
 
     if "global_optimization_mode" not in st.session_state:
-        st.session_state["global_optimization_mode"] = "Balanced"
+        st.session_state["global_optimization_mode"] = "Max Growth"
 
     user_now = normalize_email(st.session_state.get("auth_user", ""))
     is_admin = user_now == ADMIN_EMAIL
@@ -1573,15 +1573,23 @@ def main() -> None:
 
         st.header("Model Controls")
         st.caption("Binds Growth Mode: calibrated to scale high-intent growth lanes and reduce fewer bids.")
+        optimization_mode = st.select_slider(
+            "Recommendation Strategy",
+            options=OPTIMIZATION_MODES,
+            value=st.session_state.get("global_optimization_mode", "Max Growth"),
+            key="global_optimization_mode",
+        )
+        st.caption(f"Mode active: `{optimization_mode}`")
+        
+        st.markdown("**Guardrails**")
+        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 45, 45, 1)
+
         st.markdown("**Scoring Weights**")
         growth_weight = st.slider("Growth weight", 0.0, 1.0, 0.70, 0.05)
         profit_weight = st.slider("Profitability weight", 0.0, 1.0, 0.30, 0.05)
 
-        st.markdown("**Guardrails**")
-        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 45, 45, 1)
         min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
         cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
-        optimization_mode = st.session_state.get("global_optimization_mode", "Balanced")
         min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.65, 0.01)
         roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
         cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
@@ -2219,16 +2227,8 @@ def main() -> None:
                 ]].sort_values("Expected_Additional_Clicks", ascending=False)
                 render_formatted_table(seg_show, use_container_width=True)
 
-                st.markdown("**Growth vs Cost Strategy**")
-                st.select_slider(
-                    "Recommendation Strategy",
-                    options=OPTIMIZATION_MODES,
-                    value=settings.optimization_mode,
-                    key="global_optimization_mode",
-                    help="Controls recommendation aggressiveness while respecting state product strategy.",
-                )
                 st.caption(
-                    f"Mode active: `{st.session_state.get('global_optimization_mode', settings.optimization_mode)}` | "
+                    f"Recommendation Strategy: `{st.session_state.get('global_optimization_mode', settings.optimization_mode)}` | "
                     f"CPC cap: {effective_cpc_cap_pct(settings):.0f}%"
                 )
 
