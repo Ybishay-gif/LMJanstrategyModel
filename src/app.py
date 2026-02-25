@@ -1539,6 +1539,28 @@ def save_overrides_to_disk(overrides: dict) -> tuple[bool, str]:
         return False, "Failed to write manual overrides file."
 
 
+ANALYTICS_PRESETS_PATH = Path("data/analytics_presets.json")
+
+
+def load_analytics_presets() -> dict:
+    try:
+        if not ANALYTICS_PRESETS_PATH.exists():
+            return {}
+        data = json.loads(ANALYTICS_PRESETS_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_analytics_presets(presets: dict) -> tuple[bool, str]:
+    try:
+        ANALYTICS_PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ANALYTICS_PRESETS_PATH.write_text(json.dumps(presets, indent=2))
+        return True, ""
+    except Exception:
+        return False, "Failed to write analytics presets file."
+
+
 def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings, overrides: dict) -> pd.DataFrame:
     if not overrides:
         return rec_df
@@ -3861,6 +3883,22 @@ def main() -> None:
             show_cols = [c for c in dim_cols + metric_cols + ["Source Used"] if c in analytics_df.columns]
             gdf = analytics_df[show_cols].copy()
 
+            if "tab5_presets" not in st.session_state:
+                st.session_state["tab5_presets"] = load_analytics_presets()
+            presets = st.session_state.get("tab5_presets", {})
+            preset_names = sorted([str(k) for k in presets.keys()])
+            p1, p2, p3, p4 = st.columns([1.25, 1.5, 1.2, 1.2])
+            selected_preset = p1.selectbox(
+                "Preset",
+                options=["(none)"] + preset_names,
+                key="tab5_preset_select",
+            )
+            preset_name_input = p2.text_input("Preset name", value=selected_preset if selected_preset != "(none)" else "", key="tab5_preset_name")
+            save_as_clicked = p3.button("💾 Save As Preset", key="tab5_save_as_preset_btn")
+            update_clicked = p4.button("🔄 Update Preset", key="tab5_update_preset_btn", disabled=(selected_preset == "(none)"))
+
+            loaded_preset = presets.get(selected_preset, {}) if selected_preset != "(none)" else {}
+
             gb = GridOptionsBuilder.from_dataframe(gdf)
             gb.configure_default_column(
                 resizable=True,
@@ -3910,6 +3948,22 @@ def main() -> None:
                 "minWidth": 280,
                 "cellRendererParams": {"suppressCount": False},
             }
+            if isinstance(loaded_preset, dict):
+                cs = loaded_preset.get("column_state")
+                fm = loaded_preset.get("filter_model")
+                sm = loaded_preset.get("sort_model")
+                pm = loaded_preset.get("pivot_mode")
+                gs = loaded_preset.get("grid_state")
+                if cs:
+                    go["columnState"] = cs
+                if fm:
+                    go["filterModel"] = fm
+                if sm:
+                    go["sortModel"] = sm
+                if pm is not None:
+                    go["pivotMode"] = bool(pm)
+                if gs:
+                    go["initialState"] = gs
             expand_mode = st.session_state.get("tab5_expand_mode", "collapsed")
             go["groupDefaultExpanded"] = 99 if expand_mode == "expanded" else 0
             c1, c2, c3 = st.columns(3)
@@ -3958,15 +4012,13 @@ def main() -> None:
                 ".ag-paging-panel": {"background-color": "#081225", "color": "#cbd5e1"},
             }
             st.markdown("<div class='ga-shell'><div class='ga-note'>Drag dimensions in Columns panel to Row Groups / Columns / Values.</div>", unsafe_allow_html=True)
-            # Avoid a large blank area on load by sizing grid to visible grouped rows.
-            initial_group_rows = 8
-            row_px = 30
-            grid_height = max(320, min(780, 92 + initial_group_rows * row_px))
-            AgGrid(
+            # Taller default viewport to show ~100 rows as requested.
+            grid_height = 3000
+            grid_resp = AgGrid(
                 gdf,
                 gridOptions=go,
                 fit_columns_on_grid_load=False,
-                update_mode=GridUpdateMode.NO_UPDATE,
+                update_mode=GridUpdateMode.MODEL_CHANGED,
                 height=grid_height,
                 enable_enterprise_modules=True,
                 theme="balham-dark" if dark_mode else "balham",
@@ -3975,6 +4027,43 @@ def main() -> None:
                 key="tab5_general_analytics_grid",
             )
             st.markdown("</div>", unsafe_allow_html=True)
+
+            if isinstance(grid_resp, dict):
+                captured_state = {
+                    "column_state": grid_resp.get("column_state") or grid_resp.get("columns_state") or grid_resp.get("columnState"),
+                    "filter_model": grid_resp.get("filter_model") or grid_resp.get("filterModel"),
+                    "sort_model": grid_resp.get("sort_model") or grid_resp.get("sortModel"),
+                    "pivot_mode": grid_resp.get("pivot_mode") if "pivot_mode" in grid_resp else None,
+                    "grid_state": grid_resp.get("grid_state") or grid_resp.get("gridState"),
+                }
+                if any(v is not None and v != {} and v != [] for v in captured_state.values()):
+                    st.session_state["tab5_last_grid_state"] = captured_state
+
+            if save_as_clicked:
+                nm = str(preset_name_input or "").strip()
+                if not nm:
+                    st.warning("Please enter a preset name.")
+                else:
+                    payload = st.session_state.get("tab5_last_grid_state", {}) or {}
+                    presets = dict(st.session_state.get("tab5_presets", {}))
+                    presets[nm] = payload
+                    okp, errp = save_analytics_presets(presets)
+                    if okp:
+                        st.session_state["tab5_presets"] = presets
+                        st.success(f"Preset saved: {nm}")
+                    else:
+                        st.error(errp)
+
+            if update_clicked and selected_preset != "(none)":
+                payload = st.session_state.get("tab5_last_grid_state", {}) or {}
+                presets = dict(st.session_state.get("tab5_presets", {}))
+                presets[selected_preset] = payload
+                okp2, errp2 = save_analytics_presets(presets)
+                if okp2:
+                    st.session_state["tab5_presets"] = presets
+                    st.success(f"Preset updated: {selected_preset}")
+                else:
+                    st.error(errp2)
         else:
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
