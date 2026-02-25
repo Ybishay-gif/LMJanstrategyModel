@@ -3886,8 +3886,14 @@ def main() -> None:
             if "tab5_presets" not in st.session_state:
                 st.session_state["tab5_presets"] = load_analytics_presets()
             presets = st.session_state.get("tab5_presets", {})
-            preset_names = sorted([str(k) for k in presets.keys()])
-            p1, p2, p3, p4 = st.columns([1.25, 1.5, 1.2, 1.2])
+            default_preset_name = str(presets.get("__default__", "") or "")
+            preset_names = sorted([str(k) for k in presets.keys() if not str(k).startswith("__")])
+            if (
+                st.session_state.get("tab5_preset_select") in {None, ""}
+                and default_preset_name in preset_names
+            ):
+                st.session_state["tab5_preset_select"] = default_preset_name
+            p1, p2, p3, p4, p5, p6 = st.columns([1.25, 1.45, 1.1, 1.1, 1.0, 1.0])
             selected_preset = p1.selectbox(
                 "Preset",
                 options=["(none)"] + preset_names,
@@ -3896,6 +3902,8 @@ def main() -> None:
             preset_name_input = p2.text_input("Preset name", value=selected_preset if selected_preset != "(none)" else "", key="tab5_preset_name")
             save_as_clicked = p3.button("💾 Save As Preset", key="tab5_save_as_preset_btn")
             update_clicked = p4.button("🔄 Update Preset", key="tab5_update_preset_btn", disabled=(selected_preset == "(none)"))
+            set_default_clicked = p5.button("⭐ Set Default", key="tab5_set_default_btn", disabled=(selected_preset == "(none)"))
+            delete_clicked = p6.button("🗑 Delete", key="tab5_delete_preset_btn", disabled=(selected_preset == "(none)"))
 
             loaded_preset = presets.get(selected_preset, {}) if selected_preset != "(none)" else {}
 
@@ -4064,6 +4072,30 @@ def main() -> None:
                     st.success(f"Preset updated: {selected_preset}")
                 else:
                     st.error(errp2)
+
+            if set_default_clicked and selected_preset != "(none)":
+                presets = dict(st.session_state.get("tab5_presets", {}))
+                presets["__default__"] = selected_preset
+                okd, errd = save_analytics_presets(presets)
+                if okd:
+                    st.session_state["tab5_presets"] = presets
+                    st.success(f"Default preset set: {selected_preset}")
+                else:
+                    st.error(errd)
+
+            if delete_clicked and selected_preset != "(none)":
+                presets = dict(st.session_state.get("tab5_presets", {}))
+                presets.pop(selected_preset, None)
+                if presets.get("__default__", "") == selected_preset:
+                    presets["__default__"] = ""
+                okx, errx = save_analytics_presets(presets)
+                if okx:
+                    st.session_state["tab5_presets"] = presets
+                    st.session_state["tab5_preset_select"] = "(none)"
+                    st.success(f"Preset deleted: {selected_preset}")
+                    st.rerun()
+                else:
+                    st.error(errx)
         else:
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
