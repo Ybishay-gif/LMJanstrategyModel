@@ -3872,7 +3872,7 @@ def main() -> None:
             )
             for c in dim_cols:
                 if c in gdf.columns:
-                    gb.configure_column(c, rowGroup=(c in ["Product Strategy", "State"]), hide=False)
+                    gb.configure_column(c, rowGroup=(c in ["Product Strategy", "State"]), hide=(c in ["Product Strategy", "State"]))
             for c in metric_cols:
                 if c in gdf.columns:
                     agg = "sum" if c in ["Num Bids", "Num Impressions", "Cost", "Channel Clicks", "Channel Quotes", "State Binds"] else "avg"
@@ -3900,10 +3900,25 @@ def main() -> None:
             go["pivotPanelShow"] = "always"
             go["animateRows"] = True
             go["sideBar"] = {"toolPanels": ["columns", "filters"], "defaultToolPanel": "columns"}
+            go["groupDisplayType"] = "singleColumn"
+            go["autoGroupColumnDef"] = {
+                "headerName": "Drilldown",
+                "minWidth": 280,
+                "cellRendererParams": {"suppressCount": False},
+            }
+            expand_mode = st.session_state.get("tab5_expand_mode", "collapsed")
+            go["groupDefaultExpanded"] = 99 if expand_mode == "expanded" else 0
             c1, c2, c3 = st.columns(3)
             c1.metric("Rows", f"{len(gdf):,}")
             c2.metric("States", f"{gdf['State'].nunique() if 'State' in gdf.columns else 0:,}")
             c3.metric("Channel Groups", f"{gdf['Channel Groups'].nunique() if 'Channel Groups' in gdf.columns else 0:,}")
+            b1, b2, _ = st.columns([1, 1, 4])
+            if b1.button("Expand all", key="tab5_expand_all_btn"):
+                st.session_state["tab5_expand_mode"] = "expanded"
+                st.rerun()
+            if b2.button("Collapse all", key="tab5_collapse_all_btn"):
+                st.session_state["tab5_expand_mode"] = "collapsed"
+                st.rerun()
 
             custom_css = {
                 ".ag-root-wrapper": {"border": "1px solid rgba(45,212,191,0.45)", "border-radius": "10px"},
