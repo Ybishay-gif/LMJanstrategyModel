@@ -983,20 +983,27 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     src = "Channel"
     if "State" in p.columns:
         ps = p[p["State"] == state].copy()
-        if not ps.empty:
-            p = ps
-            src = "State+Channel"
-        else:
-            p = (
-                p.groupby(["Price Adjustment Percent"], as_index=False)
-                .agg(
-                    Bids=("Bids", "sum"),
-                    Clicks=("Clicks", "sum"),
-                    **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
-                    **{"CPC Lift %": ("CPC Lift %", "mean")},
-                )
-                .sort_values("Price Adjustment Percent")
+        pch = (
+            p.groupby(["Price Adjustment Percent"], as_index=False)
+            .agg(
+                Bids=("Bids", "sum"),
+                Clicks=("Clicks", "sum"),
+                **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
+                **{"CPC Lift %": ("CPC Lift %", "mean")},
             )
+            .sort_values("Price Adjustment Percent")
+        )
+        if not ps.empty:
+            ps = ps.sort_values("Price Adjustment Percent").copy()
+            ps["Source Used"] = "State+Channel"
+            pch["Source Used"] = "Channel Fallback"
+            ps_adj = set(pd.to_numeric(ps["Price Adjustment Percent"], errors="coerce").dropna().astype(float).tolist())
+            pch_missing = pch[~pd.to_numeric(pch["Price Adjustment Percent"], errors="coerce").astype(float).isin(ps_adj)].copy()
+            p = pd.concat([ps, pch_missing], ignore_index=True)
+            src = "Mixed" if not pch_missing.empty else "State+Channel"
+        else:
+            p = pch
+            p["Source Used"] = "Channel Fallback"
             src = "Channel Fallback"
 
     if "Bids" not in p.columns:
@@ -1009,6 +1016,8 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     p["Sig Icon"] = sig_vals.map(lambda x: x[1])
     p["Sig Score"] = sig_vals.map(lambda x: x[2])
     p = p[p["Sig Level"] != "Weak"].copy()
+    if "Source Used" not in p.columns:
+        p["Source Used"] = src
     p = p.sort_values("Price Adjustment Percent")
     return p, src
 
@@ -1049,6 +1058,7 @@ def build_popup_card_options(
                 "Bid Adj %": float(cr["Price Adjustment Percent"]),
                 "Sig Icon": cr.get("Sig Icon", "⚪"),
                 "Sig Level": cr.get("Sig Level", "n/a"),
+                "Source Used": str(cr.get("Source Used", source_used)),
                 "Test Bids": float(cr.get("Bids", 0) or 0),
                 "Win Rate Uplift": wr_l,
                 "CPC Uplift": cpc_l,
@@ -1082,7 +1092,10 @@ def precompute_popup_options_for_state(
         rows.append(p)
     if not rows:
         return pd.DataFrame()
-    return pd.concat(rows, ignore_index=True)
+    out = pd.concat(rows, ignore_index=True)
+    if "Source Used" not in out.columns:
+        out["Source Used"] = "Unknown"
+    return out
 
 
 @st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
@@ -1175,16 +1188,39 @@ def build_price_exploration_master_detail(
         cand_ch["Sig Icon"] = cand_ch["Sig Level"].map({"Strong": "🟢", "Medium": "🟡"}).fillna("⚪")
 
         state_pairs = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates()
-        merged_state = state_pairs.merge(cand_state, on=["State", "Channel Groups"], how="left")
-        has_state = merged_state["Price Adjustment Percent"].notna()
-        detail_state = merged_state[has_state].copy()
-        detail_state["Source Used"] = "State+Channel"
+        merged_parts: list[pd.DataFrame] = []
+        for _, pr in state_pairs.iterrows():
+            st = pr["State"]
+            ch = pr["Channel Groups"]
+            sg = pr["Segment"]
+            sk = pr["SC Key"]
+            st_rows = cand_state[(cand_state["State"] == st) & (cand_state["Channel Groups"] == ch)].copy()
+            ch_rows = cand_ch[cand_ch["Channel Groups"] == ch].copy()
 
-        missing_pairs = state_pairs[~state_pairs["SC Key"].isin(detail_state["SC Key"].dropna().unique().tolist())].copy()
-        detail_fallback = missing_pairs.merge(cand_ch, on="Channel Groups", how="left")
-        detail_fallback = detail_fallback[detail_fallback["Price Adjustment Percent"].notna()].copy()
-        detail_fallback["Source Used"] = "Channel Fallback"
-        detail_keys = pd.concat([detail_state, detail_fallback], ignore_index=True)
+            if st_rows.empty and ch_rows.empty:
+                continue
+
+            parts: list[pd.DataFrame] = []
+            if not st_rows.empty:
+                st_rows["Source Used"] = "State+Channel"
+                parts.append(st_rows)
+            if not ch_rows.empty:
+                st_adj = set(pd.to_numeric(st_rows.get("Price Adjustment Percent", pd.Series(dtype=float)), errors="coerce").dropna().astype(float).tolist())
+                ch_rows["Source Used"] = "Channel Fallback"
+                ch_rows = ch_rows[
+                    ~pd.to_numeric(ch_rows["Price Adjustment Percent"], errors="coerce").astype(float).isin(st_adj)
+                ].copy()
+                if not ch_rows.empty:
+                    parts.append(ch_rows)
+            if not parts:
+                continue
+            comb = pd.concat(parts, ignore_index=True)
+            comb["State"] = st
+            comb["Channel Groups"] = ch
+            comb["Segment"] = sg
+            comb["SC Key"] = sk
+            merged_parts.append(comb)
+        detail_keys = pd.concat(merged_parts, ignore_index=True) if merged_parts else pd.DataFrame()
     else:
         detail_keys = base[["State", "Channel Groups", "Segment", "SC Key"]].drop_duplicates().merge(
             cand_state,
@@ -1435,19 +1471,21 @@ def apply_user_bid_overrides(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, 
     if not overrides:
         return rec_df
     rec = rec_df.copy()
-    state_dict, channel_dict = _build_effect_dicts(price_eval_df, settings)
     for i, row in rec.iterrows():
         key = f"{row.get('State','')}|{row.get('Channel Groups','')}"
         o = overrides.get(key)
         if not isinstance(o, dict) or not o.get("apply", False):
             continue
         target = float(o.get("adj", row.get("Applied Price Adjustment %", 0.0)))
-        g = state_dict.get((str(row.get("State", "")), str(row.get("Channel Groups", ""))))
-        if g is None or g.empty:
-            g = channel_dict.get(str(row.get("Channel Groups", "")))
-        if g is None or g.empty:
+        cand, _ = build_adjustment_candidates(
+            price_eval_df,
+            str(row.get("State", "")),
+            str(row.get("Channel Groups", "")),
+            settings,
+        )
+        if cand is None or cand.empty:
             continue
-        gg = g.copy()
+        gg = cand.copy()
         gg["dist"] = (gg["Price Adjustment Percent"] - target).abs()
         near = gg.sort_values(["dist", "Price Adjustment Percent"], ascending=[True, True]).iloc[0]
         rec.at[i, "Suggested Price Adjustment %"] = target
