@@ -1394,6 +1394,31 @@ def build_general_analytics_df(
     out = d.merge(base, on=["State", "Channel Groups"], how="left")
     out = out.merge(ch_all, on="Channel Groups", how="left")
     out = out.merge(st_all, on="State", how="left")
+
+    # De-duplicate additive state-channel metrics across repeated testing-point rows.
+    # Each (State, Channel Groups) row is repeated by testing points, so we spread totals
+    # equally across those rows so grouped sums remain accurate.
+    if not out.empty:
+        sc_tp_cnt = (
+            out.groupby(["State", "Channel Groups"], dropna=False)["Testing Point"]
+            .transform("nunique")
+            .replace(0, 1)
+            .fillna(1.0)
+        )
+        for c in ["Num Bids", "Num Impressions", "Clicks (State-Channel)", "Quotes (State-Channel)", "Cost"]:
+            if c in out.columns:
+                out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0) / sc_tp_cnt
+
+        # State-level binds are repeated across all rows in a state; spread them so state rollups
+        # and higher-level sums are not over-counted.
+        st_row_cnt = (
+            out.groupby(["State"], dropna=False)["State"]
+            .transform("count")
+            .replace(0, 1)
+            .fillna(1.0)
+        )
+        if "State Binds" in out.columns:
+            out["State Binds"] = pd.to_numeric(out["State Binds"], errors="coerce").fillna(0.0) / st_row_cnt
     return out
 
 
@@ -3945,7 +3970,7 @@ def main() -> None:
                     )
             for c in metric_cols:
                 if c in gdf.columns:
-                    agg = "sum" if c in ["Num Bids", "Num Impressions", "Cost", "Channel Clicks", "Channel Quotes", "State Binds"] else "avg"
+                    agg = "sum" if c in ["Num Bids", "Num Impressions", "Cost", "State Binds"] else "avg"
                     gb.configure_column(c, type=["numericColumn"], aggFunc=agg)
                     if c in color_cols:
                         cmin = float(pd.to_numeric(gdf[c], errors="coerce").min()) if pd.to_numeric(gdf[c], errors="coerce").notna().any() else 0.0
