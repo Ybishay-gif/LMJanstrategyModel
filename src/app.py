@@ -3252,26 +3252,33 @@ def main() -> None:
                 background: linear-gradient(145deg, rgba(19,27,44,0.96), rgba(21,30,48,0.90)) !important;
                 border: 1px solid rgba(45,212,191,0.78) !important;
                 border-radius: 14px !important;
-                padding: 9px 10px !important;
-                min-height: 108px !important;
+                padding: 7px 9px !important;
+                min-height: 88px !important;
                 height: auto !important;
                 text-align: left !important;
                 color: #e2e8f0 !important;
-                font-size: 0.83rem !important;
-                line-height: 1.35 !important;
+                font-size: 0.79rem !important;
+                line-height: 1.28 !important;
                 box-shadow: 0 0 0 1px rgba(45,212,191,0.22), 0 0 18px rgba(45,212,191,0.28), 0 10px 26px rgba(2,6,23,0.35) !important;
                 margin-bottom: 6px !important;
                 white-space: pre-line !important;
             }
+            [class*="st-key-px_card_"] [data-testid="stButton"] {
+                margin: 0 !important;
+                padding: 0 !important;
+                text-indent: 0 !important;
+            }
             [class*="st-key-px_card_"] button p {
                 margin: 0 !important;
-                line-height: 1.42 !important;
+                line-height: 1.30 !important;
                 letter-spacing: 0.1px;
+                text-indent: 0 !important;
+                padding-left: 0 !important;
             }
             [class*="st-key-px_card_"] button strong {
                 color: #f8fafc !important;
                 font-weight: 800 !important;
-                font-size: 1.02rem !important;
+                font-size: 0.98rem !important;
             }
             [class*="st-key-px_card_"] button em {
                 color: #67e8f9 !important;
@@ -3400,30 +3407,29 @@ def main() -> None:
                 p3.caption(f"Showing cards {start_idx + 1:,} - {end_idx:,} of {total_cards:,}")
                 page_df = filt_master.iloc[start_idx:end_idx].copy()
                 # Panel height follows left card volume; both sections use the same height.
-                left_target = int(124 * len(page_df) + 100)
+                left_target = int(102 * len(page_df) + 100)
                 panel_height = max(980, min(left_target, 1900))
                 st.markdown("**Price Exploration Alert**")
                 left, right = st.columns([1.1, 1.9], gap="large")
                 with left:
                     with fixed_height_container(panel_height, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
-                            ch_name = r["Channel Groups"]
-                            card_key = f"{r['State']}|{ch_name}|{r['Segment']}"
+                            ch_raw = str(r["Channel Groups"])
+                            ch_name = ch_raw.strip()
+                            card_key = f"{r['State']}|{ch_raw}|{r['Segment']}"
                             active = card_key == st.session_state.get("px_selected_card_key")
                             points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
                             point_boxes = " ".join([f"[{p}]" for p in points[:7]])
-                            header_line = f"**{ch_name} · _{r['State']}_**"
+                            header_line = f"{ch_name} · {r['State']}"
                             stats_line = (
-                                f"Bids: **{r['Total Bids']:,.0f}**   │   "
-                                f"Clicks: **{r['Total Clicks']:,.0f}**   │   "
-                                f"Binds: **{r['Total Binds']:,.0f}**"
+                                f"Bids: {r['Total Bids']:,.0f}   |   "
+                                f"Clicks: {r['Total Clicks']:,.0f}   |   "
+                                f"Binds: {r['Total Binds']:,.0f}"
                             )
-                            segment_line = f"Segment: {r['Segment']}   |   Source: {r['Source Used']}"
                             card_label = (
                                 f"{header_line}\n"
                                 f"{stats_line}\n"
-                                f"{segment_line}\n"
-                                f"Testing Points: {point_boxes if point_boxes else 'n/a'}"
+                                f"Testing: {point_boxes if point_boxes else 'n/a'}"
                             )
                             if st.button(
                                 card_label,
@@ -3613,7 +3619,7 @@ def main() -> None:
                             tbl["Evidence Source"] = tbl["Source Used"].astype(str)
                             tbl["Win Rate Diff"] = tbl["Win Rate Uplift"].map(lambda x: f"{float(x):+.1%}")
                             tbl["Additional Clicks"] = tbl["Additional Clicks"].map(lambda x: f"{float(x):,.0f}")
-                            tbl["Additional Bid"] = tbl["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
+                            tbl["Additional Binds"] = tbl["Additional Binds"].map(lambda x: f"{float(x):,.2f}")
                             tbl["CPC Uplift"] = tbl["CPC Uplift"].map(lambda x: f"{float(x):+.1%}")
                             tbl["Additional Budget"] = tbl["Additional Budget Needed"].map(lambda x: f"${float(x):,.0f}")
                             show_tbl = tbl[
@@ -3624,7 +3630,7 @@ def main() -> None:
                                     "Evidence Source",
                                     "Win Rate Diff",
                                     "Additional Clicks",
-                                    "Additional Bid",
+                                    "Additional Binds",
                                     "CPC Uplift",
                                     "Additional Budget",
                                 ]
