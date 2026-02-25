@@ -85,6 +85,7 @@ from storage_layer import (
     save_state_strategy_overrides,
     load_strategy_profiles,
     save_strategy_profiles,
+    persistence_backend_name,
 )
 from analytics_builders import (
     build_price_exploration_master_detail,
@@ -132,6 +133,21 @@ DEFAULT_STRATEGY_PROFILES = {
     },
 }
 
+GROWTH_COST_LEVELS = [
+    "Optimize Cost",
+    "Cost Leaning",
+    "Balanced",
+    "Growth Leaning",
+    "Max Growth",
+]
+GROWTH_COST_TO_VALUE = {
+    "Optimize Cost": 0.10,
+    "Cost Leaning": 0.30,
+    "Balanced": 0.55,
+    "Growth Leaning": 0.80,
+    "Max Growth": 1.00,
+}
+
 
 def strategy_profile_mode(growth_vs_cost: float) -> str:
     x = float(np.clip(growth_vs_cost, 0.0, 1.0))
@@ -144,6 +160,14 @@ def strategy_profile_mode(growth_vs_cost: float) -> str:
     if x >= 0.20:
         return "Cost Leaning"
     return "Optimize Cost"
+
+
+def growth_label_for_value(v: float) -> str:
+    x = float(np.clip(as_float(v, 0.55), 0.0, 1.0))
+    return min(
+        GROWTH_COST_TO_VALUE.keys(),
+        key=lambda k: abs(GROWTH_COST_TO_VALUE[k] - x),
+    )
 
 
 def normalize_strategy_profiles(raw: dict) -> dict:
@@ -2157,6 +2181,11 @@ def main() -> None:
     elif selected_tab == tab_labels[1]:
         st.markdown("### Plan Settings")
         st.caption("Manage product strategy assignment and recommendation policy by strategy. Changes apply after Save.")
+        backend = persistence_backend_name()
+        if backend == "github":
+            st.caption("Persistence backend: `GitHub` (survives redeploy).")
+        else:
+            st.caption("Persistence backend: `Local file` (for redeploy-proof behavior, configure GitHub persistence secrets).")
 
         base_map = (
             base_strategy_df[["State", "Strategy Bucket"]]
@@ -2235,60 +2264,53 @@ def main() -> None:
                     st.error(err_so)
 
         st.markdown("**2. Strategy Settings**")
-        profile_rows = []
         normalized_profiles = normalize_strategy_profiles(strategy_profiles)
-        for sname in strategy_names:
-            p = normalized_profiles.get(sname, normalize_strategy_profiles({sname: {}}).get(sname, {}))
-            profile_rows.append(
-                {
-                    "Strategy": sname,
-                    "Growth vs Cost (0-100)": int(round(100.0 * float(p.get("growth_vs_cost", 0.5)))),
-                    "Max CPC %": int(round(float(p.get("max_cpc_increase_pct", 25)))),
-                    "Max Perf Drop %": round(100.0 * float(p.get("max_perf_drop", 0.15)), 1),
-                    "Min New Perf %": round(100.0 * float(p.get("min_new_performance", 0.8)), 1),
-                    "Derived Mode": strategy_profile_mode(float(p.get("growth_vs_cost", 0.5))),
-                }
-            )
-        profile_df = pd.DataFrame(profile_rows).sort_values("Strategy")
-        if "plan_profile_editor_df" not in st.session_state:
-            st.session_state["plan_profile_editor_df"] = profile_df.copy()
         with st.form("plan_profile_form", clear_on_submit=False):
-            edited_profile_df = st.data_editor(
-                st.session_state["plan_profile_editor_df"],
-                use_container_width=True,
-                hide_index=True,
-                key="plan_profile_editor",
-                column_config={
-                    "Strategy": st.column_config.TextColumn("Strategy", disabled=True),
-                    "Growth vs Cost (0-100)": st.column_config.NumberColumn("Growth vs Cost (0-100)", min_value=0, max_value=100, step=1),
-                    "Max CPC %": st.column_config.NumberColumn("Max CPC %", min_value=0, max_value=45, step=1),
-                    "Max Perf Drop %": st.column_config.NumberColumn("Max Perf Drop %", min_value=0.0, max_value=60.0, step=0.5),
-                    "Min New Perf %": st.column_config.NumberColumn("Min New Perf %", min_value=20.0, max_value=150.0, step=0.5),
-                    "Derived Mode": st.column_config.TextColumn("Derived Mode", disabled=True),
-                },
-                disabled=["Strategy", "Derived Mode"],
-            )
-            save_profiles = st.form_submit_button("Save Strategy Settings", type="primary")
-        edited_profile_df = edited_profile_df.copy()
-        edited_profile_df["Growth vs Cost (0-100)"] = pd.to_numeric(
-            edited_profile_df["Growth vs Cost (0-100)"], errors="coerce"
-        ).fillna(50).clip(0, 100)
-        edited_profile_df["Derived Mode"] = edited_profile_df["Growth vs Cost (0-100)"].map(
-            lambda x: strategy_profile_mode(float(x) / 100.0)
-        )
-        st.session_state["plan_profile_editor_df"] = edited_profile_df
-        if save_profiles:
             next_profiles = {}
-            for _, rr in edited_profile_df.iterrows():
-                sname = str(rr.get("Strategy", "")).strip()
-                if not sname:
-                    continue
+            for sname in sorted(strategy_names):
+                p = normalized_profiles.get(sname, normalize_strategy_profiles({sname: {}}).get(sname, {}))
+                skey = re.sub(r"[^A-Za-z0-9]+", "_", sname).strip("_").lower() or "strategy"
+                with st.container(border=True):
+                    st.markdown(f"**{sname}**")
+                    c1, c2, c3, c4 = st.columns([2.2, 1.0, 1.0, 1.0])
+                    growth_lbl = c1.select_slider(
+                        "Growth vs Cost",
+                        options=GROWTH_COST_LEVELS,
+                        value=growth_label_for_value(float(p.get("growth_vs_cost", 0.55))),
+                        key=f"plan_prof_growth_{skey}",
+                    )
+                    max_cpc_pct = c2.slider(
+                        "Max CPC %",
+                        min_value=0,
+                        max_value=45,
+                        value=int(round(float(p.get("max_cpc_increase_pct", 25)))),
+                        key=f"plan_prof_cpc_{skey}",
+                    )
+                    max_perf_drop_pct = c3.slider(
+                        "Max Perf Drop %",
+                        min_value=0.0,
+                        max_value=60.0,
+                        value=float(round(100.0 * float(p.get("max_perf_drop", 0.15)), 1)),
+                        step=0.5,
+                        key=f"plan_prof_drop_{skey}",
+                    )
+                    min_new_perf_pct = c4.slider(
+                        "Min New Perf %",
+                        min_value=20.0,
+                        max_value=150.0,
+                        value=float(round(100.0 * float(p.get("min_new_performance", 0.80)), 1)),
+                        step=0.5,
+                        key=f"plan_prof_minperf_{skey}",
+                    )
+                    st.caption(f"Derived mode: `{strategy_profile_mode(GROWTH_COST_TO_VALUE[growth_lbl])}`")
                 next_profiles[sname] = {
-                    "growth_vs_cost": float(np.clip(as_float(rr.get("Growth vs Cost (0-100)"), 50.0) / 100.0, 0.0, 1.0)),
-                    "max_cpc_increase_pct": float(np.clip(as_float(rr.get("Max CPC %"), 25.0), 0.0, 45.0)),
-                    "max_perf_drop": float(np.clip(as_float(rr.get("Max Perf Drop %"), 15.0) / 100.0, 0.0, 0.60)),
-                    "min_new_performance": float(np.clip(as_float(rr.get("Min New Perf %"), 80.0) / 100.0, 0.20, 1.50)),
+                    "growth_vs_cost": float(np.clip(GROWTH_COST_TO_VALUE[growth_lbl], 0.0, 1.0)),
+                    "max_cpc_increase_pct": float(np.clip(max_cpc_pct, 0.0, 45.0)),
+                    "max_perf_drop": float(np.clip(max_perf_drop_pct / 100.0, 0.0, 0.60)),
+                    "min_new_performance": float(np.clip(min_new_perf_pct / 100.0, 0.20, 1.50)),
                 }
+            save_profiles = st.form_submit_button("Save Strategy Settings", type="primary")
+        if save_profiles:
             ok_sp, err_sp = save_strategy_profiles(next_profiles)
             if ok_sp:
                 st.success("Strategy settings saved.")
