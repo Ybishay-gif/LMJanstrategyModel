@@ -3958,21 +3958,26 @@ def main() -> None:
                                     if(!Number.isFinite(v)) return {};
                                     function lerp(a,b,t){return Math.round(a + (b-a)*t);}
                                     function mix(c1,c2,t){return `rgb(${lerp(c1[0],c2[0],t)},${lerp(c1[1],c2[1],t)},${lerp(c1[2],c2[2],t)})`;}
-                                    let bg = '#0b1730';
+                                    let bg = '#8ab4f8';
+                                    let fg = '#0b1020';
                                     if(v >= 1.15){
                                         const t = Math.min((v-1.15)/0.20, 1.0);
-                                        bg = mix([153,27,27],[127,29,29],t);   // bad red gradient
+                                        bg = mix([244,67,54],[183,28,28],t);   // vivid red gradient
+                                        fg = '#ffffff';
                                     }else if(v >= 1.05){
                                         const t = (v-1.05)/0.10;
-                                        bg = mix([161,98,7],[180,83,9],t);     // ok amber gradient
+                                        bg = mix([255,202,40],[251,140,0],t);  // vivid amber gradient
+                                        fg = '#0b1020';
                                     }else if(v >= 1.00){
                                         const t = (v-1.00)/0.05;
-                                        bg = mix([22,163,74],[101,163,13],t);  // nice green->lime
+                                        bg = mix([174,213,129],[102,187,106],t); // light green gradient
+                                        fg = '#0b1020';
                                     }else{
                                         const t = Math.min((1.00-v)/0.15, 1.0);
-                                        bg = mix([34,197,94],[21,128,61],t);   // amazing deep green
+                                        bg = mix([102,187,106],[46,125,50],t); // strong green gradient
+                                        fg = '#ffffff';
                                     }
-                                    return {'backgroundColor': bg, 'color':'#f8fafc', 'fontWeight':'700'};
+                                    return {'backgroundColor': bg, 'color':fg, 'fontWeight':'700'};
                                 }
                                 """
                             )
@@ -3987,10 +3992,21 @@ def main() -> None:
                                     const max = {cmax if cmax != cmin else cmin + 1.0};
                                     const tRaw = (v - min) / (max - min);
                                     const t = Math.max(0, Math.min(1, tRaw));
-                                    const r = Math.round(153 + (22-153)*t);
-                                    const g = Math.round(27 + (163-27)*t);
-                                    const b = Math.round(27 + (74-27)*t);
-                                    return {{'backgroundColor': `rgb(${{r}},${{g}},${{b}})`, 'color':'#f8fafc', 'fontWeight':'700'}};
+                                    // Google-style vivid 3-stop gradient: red -> yellow -> green.
+                                    function lerp(a,b,x){{ return Math.round(a + (b-a)*x); }}
+                                    function mix(c1,c2,x){{ return [lerp(c1[0],c2[0],x), lerp(c1[1],c2[1],x), lerp(c1[2],c2[2],x)]; }}
+                                    const red = [234,67,53];
+                                    const yellow = [251,188,5];
+                                    const green = [52,168,83];
+                                    let rgb = [0,0,0];
+                                    if(t <= 0.5){{
+                                        rgb = mix(red, yellow, t / 0.5);
+                                    }} else {{
+                                        rgb = mix(yellow, green, (t - 0.5) / 0.5);
+                                    }}
+                                    const luminance = (0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]) / 255;
+                                    const fg = luminance > 0.62 ? '#0b1020' : '#ffffff';
+                                    return {{'backgroundColor': `rgb(${{rgb[0]}},${{rgb[1]}},${{rgb[2]}})`, 'color':fg, 'fontWeight':'700'}};
                                 }}
                                 """
                             )
