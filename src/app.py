@@ -3921,15 +3921,29 @@ def main() -> None:
                 st.rerun()
 
             custom_css = {
-                ".ag-root-wrapper": {"border": "1px solid rgba(45,212,191,0.45)", "border-radius": "10px"},
-                ".ag-header": {"background-color": "#0f172a"},
-                ".ag-header-cell-label": {"color": "#c7d2fe", "font-weight": "700"},
-                ".ag-row": {"color": "#e2e8f0"},
-                ".ag-row-hover": {"background-color": "rgba(34,211,238,0.08) !important"},
-                ".ag-side-bar": {"background-color": "#0b1220"},
-                ".ag-tool-panel-wrapper": {"background-color": "#0b1220", "color": "#cbd5e1"},
+                ".ag-root-wrapper": {
+                    "border": "1px solid rgba(45,212,191,0.45)",
+                    "border-radius": "10px",
+                    "background-color": "#081225",
+                },
+                ".ag-root-wrapper-body": {"background-color": "#081225"},
+                ".ag-header": {"background-color": "#0b1730", "border-bottom": "1px solid rgba(45,212,191,0.20)"},
+                ".ag-header-cell": {"background-color": "#0b1730"},
+                ".ag-header-cell-label": {"color": "#e2e8f0", "font-weight": "700"},
+                ".ag-cell": {"color": "#dbeafe", "background-color": "#081225", "border-color": "rgba(148,163,184,0.12)"},
+                ".ag-row": {"background-color": "#081225"},
+                ".ag-row-even": {"background-color": "#09172b"},
+                ".ag-row-hover": {"background-color": "rgba(34,211,238,0.10) !important"},
+                ".ag-row-selected": {"background-color": "rgba(34,211,238,0.16) !important"},
+                ".ag-row-group": {"color": "#f8fafc", "font-weight": "700"},
+                ".ag-side-bar": {"background-color": "#081225", "border-left": "1px solid rgba(45,212,191,0.18)"},
+                ".ag-tool-panel-wrapper": {"background-color": "#081225", "color": "#cbd5e1"},
+                ".ag-tool-panel-wrapper *": {"color": "#cbd5e1"},
+                ".ag-checkbox-input-wrapper": {"opacity": "1 !important"},
+                ".ag-icon": {"color": "#cbd5e1 !important"},
+                ".ag-paging-panel": {"background-color": "#081225", "color": "#cbd5e1"},
             }
-            st.markdown("<div class='ga-shell'><div class='ga-note'>Use the side panel to drag dimensions between Row Groups, Columns, and Values.</div>", unsafe_allow_html=True)
+            st.markdown("<div class='ga-shell'><div class='ga-note'>Drag dimensions in Columns panel to Row Groups / Columns / Values.</div>", unsafe_allow_html=True)
             AgGrid(
                 gdf,
                 gridOptions=go,
@@ -3937,7 +3951,7 @@ def main() -> None:
                 update_mode=GridUpdateMode.NO_UPDATE,
                 height=640,
                 enable_enterprise_modules=True,
-                theme="alpine-dark" if dark_mode else "streamlit",
+                theme="balham-dark" if dark_mode else "balham",
                 custom_css=custom_css,
                 allow_unsafe_jscode=True,
                 key="tab5_general_analytics_grid",
