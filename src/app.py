@@ -1443,6 +1443,34 @@ def parse_adj_from_label(label: str) -> Optional[float]:
         return None
 
 
+def apply_grid_preset(go: dict, loaded_preset: Optional[dict]) -> dict:
+    if not isinstance(go, dict):
+        go = {}
+    if not isinstance(loaded_preset, dict):
+        return go
+    cs = loaded_preset.get("column_state")
+    fm = loaded_preset.get("filter_model")
+    sm = loaded_preset.get("sort_model")
+    pm = loaded_preset.get("pivot_mode")
+    gs = loaded_preset.get("grid_state")
+    if cs:
+        go["columnState"] = cs
+    if fm:
+        go["filterModel"] = fm
+    if sm:
+        go["sortModel"] = sm
+    if pm is not None:
+        go["pivotMode"] = bool(pm)
+    if gs:
+        go["initialState"] = gs
+    return go
+
+
+def tab5_grid_component_key(selected_preset: str) -> str:
+    p = str(selected_preset or "(none)").strip() or "(none)"
+    return f"tab5_general_analytics_grid::{p}"
+
+
 def as_float(v, default: float = 0.0) -> float:
     try:
         if pd.isna(v):
@@ -4037,22 +4065,19 @@ def main() -> None:
                             )
                         gb.configure_column(c, cellStyle=style_js)
 
-            if "Win Rate" in gdf.columns:
-                gb.configure_column("Win Rate", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
-            if "Channel QSR" in gdf.columns:
-                gb.configure_column("Channel QSR", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
-            if "Channel Q2C" in gdf.columns:
-                gb.configure_column("Channel Q2C", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
-            if "State ROE" in gdf.columns:
-                gb.configure_column("State ROE", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(1)+'%':'';}"))
-            if "State Combined Ratio" in gdf.columns:
-                gb.configure_column("State Combined Ratio", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(1)+'%':'';}"))
-            if "Avg Bid" in gdf.columns:
-                gb.configure_column("Avg Bid", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+v.toFixed(2)):'';}"))
-            if "CPC" in gdf.columns:
-                gb.configure_column("CPC", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+v.toFixed(2)):'';}"))
-            if "Cost" in gdf.columns:
-                gb.configure_column("Cost", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+Math.round(v).toLocaleString()):'';}"))
+            int_fmt = JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?Math.round(v).toLocaleString():'';}")
+            pct0_fmt = JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?Math.round(v*100).toLocaleString()+'%':'';}")
+            usd0_fmt = JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?('$'+Math.round(v).toLocaleString()):'';}")
+
+            for c in ["Num Bids", "Num Impressions", "Channel Clicks", "Channel Quotes", "State Binds"]:
+                if c in gdf.columns:
+                    gb.configure_column(c, valueFormatter=int_fmt)
+            for c in ["Win Rate", "Channel QSR", "Channel Q2C", "State ROE", "State Combined Ratio"]:
+                if c in gdf.columns:
+                    gb.configure_column(c, valueFormatter=pct0_fmt)
+            for c in ["Avg Bid", "CPC", "Cost"]:
+                if c in gdf.columns:
+                    gb.configure_column(c, valueFormatter=usd0_fmt)
 
             go = gb.build()
             go["rowGroupPanelShow"] = "always"
@@ -4065,22 +4090,7 @@ def main() -> None:
                 "minWidth": 280,
                 "cellRendererParams": {"suppressCount": False},
             }
-            if isinstance(loaded_preset, dict):
-                cs = loaded_preset.get("column_state")
-                fm = loaded_preset.get("filter_model")
-                sm = loaded_preset.get("sort_model")
-                pm = loaded_preset.get("pivot_mode")
-                gs = loaded_preset.get("grid_state")
-                if cs:
-                    go["columnState"] = cs
-                if fm:
-                    go["filterModel"] = fm
-                if sm:
-                    go["sortModel"] = sm
-                if pm is not None:
-                    go["pivotMode"] = bool(pm)
-                if gs:
-                    go["initialState"] = gs
+            go = apply_grid_preset(go, loaded_preset)
             expand_mode = st.session_state.get("tab5_expand_mode", "collapsed")
             go["groupDefaultExpanded"] = 99 if expand_mode == "expanded" else 0
             b1, b2, _ = st.columns([1, 1, 4])
@@ -4178,7 +4188,7 @@ def main() -> None:
                 theme="balham-dark" if dark_mode else "balham",
                 custom_css=custom_css,
                 allow_unsafe_jscode=True,
-                key="tab5_general_analytics_grid",
+                key=tab5_grid_component_key(selected_preset),
             )
             st.markdown("</div>", unsafe_allow_html=True)
 

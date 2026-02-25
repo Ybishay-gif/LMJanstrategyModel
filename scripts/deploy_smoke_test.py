@@ -237,6 +237,30 @@ def test_row_option_map_includes_current_recommendation(rec_df: pd.DataFrame, pr
     return {"checked_rows": checked, "state": state}
 
 
+def test_tab5_preset_switch_behavior() -> dict:
+    p1 = "Preset A"
+    p2 = "Preset B"
+    k1 = app.tab5_grid_component_key(p1)
+    k2 = app.tab5_grid_component_key(p2)
+    assert k1 != k2, "Grid key should change when preset changes to force remount"
+
+    base_go = {"rowGroupPanelShow": "always"}
+    preset = {
+        "column_state": [{"colId": "State", "hide": False}],
+        "filter_model": {"State": {"filterType": "set", "values": ["VA"]}},
+        "sort_model": [{"colId": "Cost", "sort": "desc"}],
+        "pivot_mode": True,
+        "grid_state": {"columns": {"columnVisibility": {"hiddenColIds": ["Source Used"]}}},
+    }
+    out_go = app.apply_grid_preset(dict(base_go), preset)
+    assert out_go.get("columnState"), "Preset column state was not applied"
+    assert out_go.get("filterModel"), "Preset filter model was not applied"
+    assert out_go.get("sortModel"), "Preset sort model was not applied"
+    assert out_go.get("pivotMode") is True, "Preset pivot mode was not applied"
+    assert out_go.get("initialState"), "Preset initial grid state was not applied"
+    return {"key_a": k1, "key_b": k2, "preset_fields_applied": True}
+
+
 def main() -> None:
     settings = default_settings()
     rec_df, _state_df, _state_seg_df, price_eval, _state_extra, _state_seg_extra = build_data(settings)
@@ -246,12 +270,14 @@ def main() -> None:
 
     r1 = test_manual_override_recomputes(rec_df, price_eval, settings)
     r2 = test_row_option_map_includes_current_recommendation(rec_df, price_eval, settings)
+    r3 = test_tab5_preset_switch_behavior()
 
     out = {
         "status": "PASS",
         "settings": asdict(settings),
         "manual_override_test": r1,
         "row_option_map_test": r2,
+        "tab5_preset_switch_test": r3,
     }
     print(json.dumps(out, indent=2))
 
