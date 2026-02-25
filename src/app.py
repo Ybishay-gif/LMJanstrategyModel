@@ -1877,6 +1877,19 @@ def main() -> None:
         add_binds = float(pd.to_numeric(sim_all["Expected Additional Binds"], errors="coerce").fillna(0).sum())
         add_budget = float(pd.to_numeric(sim_all["Additional Budget Needed Sim"], errors="coerce").fillna(0).sum())
 
+        if "tab0_strategy_editor_open" not in st.session_state:
+            st.session_state["tab0_strategy_editor_open"] = False
+        h1, h2 = st.columns([0.95, 0.05])
+        h1.markdown("### Product Strategy Analysis")
+        if not st.session_state["tab0_strategy_editor_open"]:
+            if h2.button("✏️", key="tab0_open_editor_icon", help="Edit product strategy"):
+                st.session_state["tab0_strategy_editor_open"] = True
+                st.rerun()
+        else:
+            if h2.button("▾", key="tab0_collapse_editor_icon", help="Collapse editor"):
+                st.session_state["tab0_strategy_editor_open"] = False
+                st.rerun()
+
         render_kpi_tiles(
             [
                 {"label": "Total Clicks", "value": f"{total_clicks:,.0f}"},
@@ -1895,7 +1908,6 @@ def main() -> None:
             cols=4,
         )
 
-        st.markdown("**Product Strategy Editor (Save Required)**")
         base_map = (
             base_strategy_df[["State", "Strategy Bucket"]]
             .dropna()
@@ -1920,8 +1932,7 @@ def main() -> None:
             {
                 "State": states_sorted,
                 "Current Strategy": [current_map.get(s, "") for s in states_sorted],
-                "Selected Strategy": [current_map.get(s, "") for s in states_sorted],
-                "Base Strategy": [base_map.get(s, current_map.get(s, "")) for s in states_sorted],
+                "New Strategy": [current_map.get(s, "") for s in states_sorted],
             }
         )
         if (
@@ -1931,44 +1942,55 @@ def main() -> None:
             st.session_state["tab0_strategy_editor_df"] = editor_src.copy()
             st.session_state["tab0_strategy_editor_states"] = tuple(states_sorted)
 
-        edited_strategy_df = st.data_editor(
-            st.session_state["tab0_strategy_editor_df"],
-            use_container_width=True,
-            hide_index=True,
-            key="tab0_strategy_editor",
-            column_config={
-                "State": st.column_config.TextColumn("State", disabled=True),
-                "Current Strategy": st.column_config.TextColumn("Current Strategy", disabled=True),
-                "Selected Strategy": st.column_config.SelectboxColumn(
-                    "Selected Strategy",
-                    options=strategy_options,
-                    required=True,
-                ),
-                "Base Strategy": st.column_config.TextColumn("Base Strategy", disabled=True),
-            },
-            disabled=["State", "Current Strategy", "Base Strategy"],
-        )
-        st.session_state["tab0_strategy_editor_df"] = edited_strategy_df.copy()
-        if st.button("Save Product Strategy", key="tab0_save_strategy_btn", type="primary"):
-            prev_overrides = dict(load_state_strategy_overrides())
-            next_overrides = dict(prev_overrides)
-            for _, rr in edited_strategy_df.iterrows():
-                st_code = str(rr.get("State", "")).strip().upper()
-                sel = str(rr.get("Selected Strategy", "")).strip()
-                base = str(rr.get("Base Strategy", "")).strip()
-                if not st_code or not sel:
-                    continue
-                if sel == base:
-                    next_overrides.pop(st_code, None)
-                else:
-                    next_overrides[st_code] = sel
-            ok_so, err_so = save_state_strategy_overrides(next_overrides)
-            if ok_so:
-                st.success("Saved new product strategy. Recalculating model...")
-                st.cache_data.clear()
+        if st.session_state["tab0_strategy_editor_open"]:
+            st.markdown("**Product Strategy Editor**")
+            with st.form("tab0_strategy_editor_form", clear_on_submit=False):
+                edited_strategy_df = st.data_editor(
+                    st.session_state["tab0_strategy_editor_df"][["State", "Current Strategy", "New Strategy"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    key="tab0_strategy_editor",
+                    column_config={
+                        "State": st.column_config.TextColumn("State", disabled=True),
+                        "Current Strategy": st.column_config.TextColumn("Current Strategy", disabled=True),
+                        "New Strategy": st.column_config.SelectboxColumn(
+                            "New Strategy",
+                            options=strategy_options,
+                            required=True,
+                        ),
+                    },
+                    disabled=["State", "Current Strategy"],
+                )
+                c_save, c_spacer, c_collapse = st.columns([0.2, 0.6, 0.2])
+                save_strategy = c_save.form_submit_button("Save", type="primary")
+                collapse_strategy = c_collapse.form_submit_button("Collapse")
+
+            st.session_state["tab0_strategy_editor_df"] = edited_strategy_df.copy()
+            if collapse_strategy:
+                st.session_state["tab0_strategy_editor_open"] = False
                 st.rerun()
-            else:
-                st.error(err_so)
+            if save_strategy:
+                with st.spinner("Saving strategy and recalculating..."):
+                    prev_overrides = dict(load_state_strategy_overrides())
+                    next_overrides = dict(prev_overrides)
+                    for _, rr in edited_strategy_df.iterrows():
+                        st_code = str(rr.get("State", "")).strip().upper()
+                        sel = str(rr.get("New Strategy", "")).strip()
+                        base = str(base_map.get(st_code, current_map.get(st_code, ""))).strip()
+                        if not st_code or not sel:
+                            continue
+                        if sel == base:
+                            next_overrides.pop(st_code, None)
+                        else:
+                            next_overrides[st_code] = sel
+                    ok_so, err_so = save_state_strategy_overrides(next_overrides)
+                    if ok_so:
+                        st.session_state["tab0_strategy_editor_open"] = False
+                        st.success("Saved.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(err_so)
 
         map_mode0 = st.radio(
             "Map color mode",
