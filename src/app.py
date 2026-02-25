@@ -3900,17 +3900,21 @@ def main() -> None:
                 and default_preset_name in preset_names
             ):
                 st.session_state["tab5_preset_select"] = default_preset_name
-            p1, p2, p3, p4, p5, p6 = st.columns([1.15, 1.3, 1.1, 1.05, 0.95, 0.95])
+            st.markdown("**Presets**")
+            p1, p2, p3, p4, p5, p6, p7 = st.columns([1.1, 1.25, 0.95, 1.05, 1.0, 0.9, 0.85])
             selected_preset = p1.selectbox(
                 "Preset",
                 options=["(none)"] + preset_names,
                 key="tab5_preset_select",
             )
             preset_name_input = p2.text_input("Preset name", value=selected_preset if selected_preset != "(none)" else "", key="tab5_preset_name")
-            save_as_clicked = p3.button("💾 Save As Preset", key="tab5_save_as_preset_btn")
-            update_clicked = p4.button("🔄 Update Preset", key="tab5_update_preset_btn", disabled=(selected_preset == "(none)"))
-            set_default_clicked = p5.button("⭐ Set Default", key="tab5_set_default_btn", disabled=(selected_preset == "(none)"))
-            delete_clicked = p6.button("🗑 Delete", key="tab5_delete_preset_btn", disabled=(selected_preset == "(none)"))
+            load_clicked = p3.button("📂 Load", key="tab5_load_preset_btn", disabled=(selected_preset == "(none)"))
+            save_as_clicked = p4.button("💾 Save As", key="tab5_save_as_preset_btn")
+            update_clicked = p5.button("🔄 Update", key="tab5_update_preset_btn", disabled=(selected_preset == "(none)"))
+            set_default_clicked = p6.button("⭐ Default", key="tab5_set_default_btn", disabled=(selected_preset == "(none)"))
+            delete_clicked = p7.button("🗑", key="tab5_delete_preset_btn", disabled=(selected_preset == "(none)"))
+            if default_preset_name:
+                st.caption(f"Default preset: `{default_preset_name}`")
 
             colorable_cols = [c for c in metric_cols if c in gdf.columns]
             default_color_cols = st.session_state.get("tab5_color_cols", ["State Combined Ratio"] if "State Combined Ratio" in colorable_cols else [])
@@ -3923,6 +3927,9 @@ def main() -> None:
             )
 
             loaded_preset = presets.get(selected_preset, {}) if selected_preset != "(none)" else {}
+            if load_clicked and selected_preset != "(none)":
+                st.session_state["tab5_preset_loaded_msg"] = f"Loaded preset: {selected_preset}"
+                st.rerun()
 
             gb = GridOptionsBuilder.from_dataframe(gdf)
             gb.configure_default_column(
@@ -4164,6 +4171,8 @@ def main() -> None:
                     st.rerun()
                 else:
                     st.error(errx)
+            if st.session_state.get("tab5_preset_loaded_msg"):
+                st.success(st.session_state.pop("tab5_preset_loaded_msg"))
         else:
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
