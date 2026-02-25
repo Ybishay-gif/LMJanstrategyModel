@@ -112,9 +112,30 @@ def _session_signing_key() -> bytes:
     return raw.encode("utf-8")
 
 
-def make_stateless_session_token(email: str) -> str:
+def _request_fingerprint(headers: Optional[dict] = None) -> str:
+    """
+    Build a lightweight client fingerprint to reduce session-token sharing risk.
+    Not a strong security boundary, but enough to block copied URL sessions across users.
+    """
+    try:
+        h = headers if isinstance(headers, dict) else dict(getattr(st, "context").headers or {})
+    except Exception:
+        h = {}
+    ua = str(h.get("user-agent", "")).strip().lower()
+    al = str(h.get("accept-language", "")).strip().lower()
+    xff = str(h.get("x-forwarded-for", "")).split(",")[0].strip().lower()
+    raw = f"{ua}|{al}|{xff}"
+    if not raw.replace("|", ""):
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def make_stateless_session_token(email: str, fingerprint: str = "") -> str:
     exp = int((datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).timestamp())
     payload = {"e": normalize_email(email), "x": exp}
+    fp = str(fingerprint or "").strip()
+    if fp:
+        payload["f"] = fp
     payload_raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     payload_b64 = base64.urlsafe_b64encode(payload_raw).decode("utf-8").rstrip("=")
     sig = hmac.new(_session_signing_key(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
@@ -122,7 +143,7 @@ def make_stateless_session_token(email: str) -> str:
     return f"v2.{payload_b64}.{sig_b64}"
 
 
-def resolve_stateless_session_token(token: str) -> Optional[str]:
+def resolve_stateless_session_token(token: str, current_fingerprint: str = "") -> Optional[str]:
     t = str(token or "").strip()
     if not t.startswith("v2."):
         return None
@@ -136,9 +157,12 @@ def resolve_stateless_session_token(token: str) -> Optional[str]:
         payload = json.loads(payload_raw.decode("utf-8"))
         email = normalize_email(payload.get("e", ""))
         exp = int(payload.get("x", 0))
+        token_fp = str(payload.get("f", "")).strip()
         if not email or "@" not in email:
             return None
         if exp <= int(datetime.now(timezone.utc).timestamp()):
+            return None
+        if token_fp and token_fp != str(current_fingerprint or "").strip():
             return None
         allowed = load_allowed_emails()
         if email not in allowed:
@@ -170,7 +194,7 @@ def resolve_session_token(users: dict, token: str) -> Optional[str]:
     t = str(token or "").strip()
     if not t:
         return None
-    stateless = resolve_stateless_session_token(t)
+    stateless = resolve_stateless_session_token(t, _request_fingerprint())
     if stateless:
         return stateless
     now = datetime.now(timezone.utc)
@@ -253,6 +277,9 @@ def render_auth_gate() -> bool:
     if isinstance(qp_session, list):
         qp_session = qp_session[0] if qp_session else ""
     remembered_email = resolve_session_token(users, str(qp_session or ""))
+    if qp_session and not remembered_email and "session_token" in st.query_params:
+        # Drop stale/invalid/shared token so user sees login instead of silent bypass attempts.
+        del st.query_params["session_token"]
     if remembered_email:
         st.session_state["auth_ok"] = True
         st.session_state["auth_user"] = remembered_email
@@ -351,7 +378,9 @@ def render_auth_gate() -> bool:
             if not ok2:
                 st.error(err2)
                 return False
-            st.query_params["session_token"] = make_stateless_session_token(staged_email)
+            st.query_params["session_token"] = make_stateless_session_token(
+                staged_email, _request_fingerprint()
+            )
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.session_state["auth_stage"] = "password"
@@ -396,7 +425,9 @@ def render_auth_gate() -> bool:
             if not ok3:
                 st.error(err3)
                 return False
-            st.query_params["session_token"] = make_stateless_session_token(staged_email)
+            st.query_params["session_token"] = make_stateless_session_token(
+                staged_email, _request_fingerprint()
+            )
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = staged_email
             st.rerun()
