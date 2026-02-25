@@ -3901,16 +3901,15 @@ def main() -> None:
             ):
                 st.session_state["tab5_preset_select"] = default_preset_name
             st.markdown("**Presets**")
-            p1, p2, p3, p4, p5, p6, p7 = st.columns([1.1, 1.25, 0.95, 1.05, 1.0, 0.9, 0.85])
+            p1, p2, p4, p5, p6, p7 = st.columns([1.2, 1.45, 1.05, 1.2, 0.9, 0.85])
             selected_preset = p1.selectbox(
                 "Preset",
                 options=["(none)"] + preset_names,
                 key="tab5_preset_select",
             )
             preset_name_input = p2.text_input("Preset name", value=selected_preset if selected_preset != "(none)" else "", key="tab5_preset_name")
-            load_clicked = p3.button("📂 Load", key="tab5_load_preset_btn", disabled=(selected_preset == "(none)"))
             save_as_clicked = p4.button("💾 Save As", key="tab5_save_as_preset_btn")
-            update_clicked = p5.button("🔄 Update", key="tab5_update_preset_btn", disabled=(selected_preset == "(none)"))
+            update_clicked = p5.button("🔄 Update Preset", key="tab5_update_preset_btn") if selected_preset != "(none)" else False
             set_default_clicked = p6.button("⭐ Default", key="tab5_set_default_btn", disabled=(selected_preset == "(none)"))
             delete_clicked = p7.button("🗑", key="tab5_delete_preset_btn", disabled=(selected_preset == "(none)"))
             if default_preset_name:
@@ -3927,9 +3926,6 @@ def main() -> None:
             )
 
             loaded_preset = presets.get(selected_preset, {}) if selected_preset != "(none)" else {}
-            if load_clicked and selected_preset != "(none)":
-                st.session_state["tab5_preset_loaded_msg"] = f"Loaded preset: {selected_preset}"
-                st.rerun()
 
             gb = GridOptionsBuilder.from_dataframe(gdf)
             gb.configure_default_column(
@@ -4046,10 +4042,6 @@ def main() -> None:
                     go["initialState"] = gs
             expand_mode = st.session_state.get("tab5_expand_mode", "collapsed")
             go["groupDefaultExpanded"] = 99 if expand_mode == "expanded" else 0
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Rows", f"{len(gdf):,}")
-            c2.metric("States", f"{gdf['State'].nunique() if 'State' in gdf.columns else 0:,}")
-            c3.metric("Channel Groups", f"{gdf['Channel Groups'].nunique() if 'Channel Groups' in gdf.columns else 0:,}")
             b1, b2, _ = st.columns([1, 1, 4])
             if b1.button("Expand all", key="tab5_expand_all_btn"):
                 st.session_state["tab5_expand_mode"] = "expanded"
@@ -4209,8 +4201,6 @@ def main() -> None:
                     st.rerun()
                 else:
                     st.error(errx)
-            if st.session_state.get("tab5_preset_loaded_msg"):
-                st.success(st.session_state.pop("tab5_preset_loaded_msg"))
         else:
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
