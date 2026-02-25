@@ -3263,6 +3263,15 @@ def main() -> None:
                 margin-bottom: 6px !important;
                 white-space: pre-line !important;
             }
+            [class*="st-key-px_card_"] button > div {
+                width: 100% !important;
+                display: flex !important;
+                justify-content: flex-start !important;
+                align-items: flex-start !important;
+                text-align: left !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
             [class*="st-key-px_card_"] [data-testid="stButton"] {
                 margin: 0 !important;
                 padding: 0 !important;
@@ -3274,6 +3283,8 @@ def main() -> None:
                 letter-spacing: 0.1px;
                 text-indent: 0 !important;
                 padding-left: 0 !important;
+                width: 100% !important;
+                text-align: left !important;
             }
             [class*="st-key-px_card_"] button strong {
                 color: #f8fafc !important;
@@ -3415,21 +3426,21 @@ def main() -> None:
                     with fixed_height_container(panel_height, key="tab4_cards_scroll"):
                         for _, r in page_df.iterrows():
                             ch_raw = str(r["Channel Groups"])
-                            ch_name = ch_raw.strip()
+                            ch_name = " ".join(ch_raw.split())
                             card_key = f"{r['State']}|{ch_raw}|{r['Segment']}"
                             active = card_key == st.session_state.get("px_selected_card_key")
                             points = [p.strip() for p in str(r["Testing Points"]).split("||") if str(p).strip()]
                             point_boxes = " ".join([f"[{p}]" for p in points[:7]])
-                            header_line = f"{ch_name} · {r['State']}"
+                            header_line = f"**{ch_name} · {r['State']}**"
                             stats_line = (
-                                f"Bids: {r['Total Bids']:,.0f}   |   "
-                                f"Clicks: {r['Total Clicks']:,.0f}   |   "
-                                f"Binds: {r['Total Binds']:,.0f}"
+                                f"**Bids:** {r['Total Bids']:,.0f}   |   "
+                                f"**Clicks:** {r['Total Clicks']:,.0f}   |   "
+                                f"**Binds:** {r['Total Binds']:,.0f}"
                             )
                             card_label = (
                                 f"{header_line}\n"
                                 f"{stats_line}\n"
-                                f"Testing: {point_boxes if point_boxes else 'n/a'}"
+                                f"*Testing:* {point_boxes if point_boxes else 'n/a'}"
                             )
                             if st.button(
                                 card_label,
