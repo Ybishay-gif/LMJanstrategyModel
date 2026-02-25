@@ -1327,7 +1327,7 @@ def build_general_analytics_df(
     if rec_df is None or rec_df.empty or detail_df is None or detail_df.empty:
         return pd.DataFrame()
 
-    base = rec_df.groupby(["State", "Channel Groups", "Segment"], as_index=False).agg(
+    base = rec_df.groupby(["State", "Channel Groups"], as_index=False).agg(
         **{"Product Strategy": ("Strategy Bucket", "first")},
         **{"Num Bids": ("Bids", "sum")},
         **{"Num Impressions": ("Impressions", "sum")},
@@ -1346,7 +1346,7 @@ def build_general_analytics_df(
     w["__avg_bid_x_w__"] = pd.to_numeric(w["Avg. Bid"], errors="coerce").fillna(0.0) * w["__w_bids__"]
     w["__avg_cpc_x_clicks__"] = pd.to_numeric(w["Avg. CPC"], errors="coerce").fillna(0.0) * pd.to_numeric(w["Clicks"], errors="coerce").fillna(0.0)
     w["__wr_x_bids__"] = pd.to_numeric(w["Bids to Clicks"], errors="coerce").fillna(0.0) * w["__w_bids__"]
-    wt = w.groupby(["State", "Channel Groups", "Segment"], as_index=False).agg(
+    wt = w.groupby(["State", "Channel Groups"], as_index=False).agg(
         __w_bids__=("__w_bids__", "sum"),
         __clicks__=("Clicks", "sum"),
         __avg_bid_x_w__=("__avg_bid_x_w__", "sum"),
@@ -1356,8 +1356,8 @@ def build_general_analytics_df(
     wt["Avg Bid"] = np.where(wt["__w_bids__"] > 0, wt["__avg_bid_x_w__"] / wt["__w_bids__"], np.nan)
     wt["CPC"] = np.where(wt["__clicks__"] > 0, wt["__avg_cpc_x_clicks__"] / wt["__clicks__"], np.nan)
     wt["Win Rate"] = np.where(wt["__w_bids__"] > 0, wt["__wr_x_bids__"] / wt["__w_bids__"], np.nan)
-    wt = wt[["State", "Channel Groups", "Segment", "Avg Bid", "CPC", "Win Rate"]]
-    base = base.merge(wt, on=["State", "Channel Groups", "Segment"], how="left")
+    wt = wt[["State", "Channel Groups", "Avg Bid", "CPC", "Win Rate"]]
+    base = base.merge(wt, on=["State", "Channel Groups"], how="left")
 
     ch_all = rec_df.groupby("Channel Groups", as_index=False).agg(
         __ch_clicks=("Clicks", "sum"),
@@ -1382,9 +1382,16 @@ def build_general_analytics_df(
 
     d = detail_df.copy()
     d["Testing Point"] = d["Bid Adj %"].map(lambda x: f"{float(x):+.0f}%")
-    d = d[["State", "Channel Groups", "Segment", "Testing Point", "Bid Adj %", "Source Used"]].drop_duplicates()
+    d["__src_rank__"] = np.select(
+        [d["Source Used"].eq("State+Channel"), d["Source Used"].eq("Channel Fallback"), d["Source Used"].eq("Channel")],
+        [0, 1, 2],
+        default=3,
+    )
+    d = d.sort_values(["State", "Channel Groups", "Bid Adj %", "__src_rank__"])
+    d = d.drop_duplicates(subset=["State", "Channel Groups", "Bid Adj %"], keep="first")
+    d = d[["State", "Channel Groups", "Testing Point", "Bid Adj %", "Source Used"]]
 
-    out = d.merge(base, on=["State", "Channel Groups", "Segment"], how="left")
+    out = d.merge(base, on=["State", "Channel Groups"], how="left")
     out = out.merge(ch_all, on="Channel Groups", how="left")
     out = out.merge(st_all, on="State", how="left")
     return out
@@ -3864,7 +3871,7 @@ def main() -> None:
         if analytics_df.empty:
             st.info("No analytics rows available for current filters/data.")
         elif AGGRID_AVAILABLE:
-            dim_cols = ["Product Strategy", "State", "Channel Groups", "Testing Point", "Segment"]
+            dim_cols = ["Product Strategy", "State", "Channel Groups", "Testing Point"]
             metric_cols = [
                 "Num Bids",
                 "Num Impressions",
@@ -3893,7 +3900,7 @@ def main() -> None:
                 and default_preset_name in preset_names
             ):
                 st.session_state["tab5_preset_select"] = default_preset_name
-            p1, p2, p3, p4, p5, p6 = st.columns([1.25, 1.45, 1.1, 1.1, 1.0, 1.0])
+            p1, p2, p3, p4, p5, p6 = st.columns([1.15, 1.3, 1.1, 1.05, 0.95, 0.95])
             selected_preset = p1.selectbox(
                 "Preset",
                 options=["(none)"] + preset_names,
@@ -3904,6 +3911,16 @@ def main() -> None:
             update_clicked = p4.button("🔄 Update Preset", key="tab5_update_preset_btn", disabled=(selected_preset == "(none)"))
             set_default_clicked = p5.button("⭐ Set Default", key="tab5_set_default_btn", disabled=(selected_preset == "(none)"))
             delete_clicked = p6.button("🗑 Delete", key="tab5_delete_preset_btn", disabled=(selected_preset == "(none)"))
+
+            colorable_cols = [c for c in metric_cols if c in gdf.columns]
+            default_color_cols = st.session_state.get("tab5_color_cols", ["State Combined Ratio"] if "State Combined Ratio" in colorable_cols else [])
+            color_cols = st.multiselect(
+                "Color-code columns",
+                options=colorable_cols,
+                default=[c for c in default_color_cols if c in colorable_cols],
+                key="tab5_color_cols",
+                help="Select metric columns for gradient color scale.",
+            )
 
             loaded_preset = presets.get(selected_preset, {}) if selected_preset != "(none)" else {}
 
@@ -3927,6 +3944,54 @@ def main() -> None:
                 if c in gdf.columns:
                     agg = "sum" if c in ["Num Bids", "Num Impressions", "Cost", "Channel Clicks", "Channel Quotes", "State Binds"] else "avg"
                     gb.configure_column(c, type=["numericColumn"], aggFunc=agg)
+                    if c in color_cols:
+                        cmin = float(pd.to_numeric(gdf[c], errors="coerce").min()) if pd.to_numeric(gdf[c], errors="coerce").notna().any() else 0.0
+                        cmax = float(pd.to_numeric(gdf[c], errors="coerce").max()) if pd.to_numeric(gdf[c], errors="coerce").notna().any() else 1.0
+                        if c == "State Combined Ratio":
+                            style_js = JsCode(
+                                """
+                                function(p){
+                                    const v = Number(p.value);
+                                    if(!Number.isFinite(v)) return {};
+                                    function lerp(a,b,t){return Math.round(a + (b-a)*t);}
+                                    function mix(c1,c2,t){return `rgb(${lerp(c1[0],c2[0],t)},${lerp(c1[1],c2[1],t)},${lerp(c1[2],c2[2],t)})`;}
+                                    let bg = '#0b1730';
+                                    if(v >= 1.15){
+                                        const t = Math.min((v-1.15)/0.20, 1.0);
+                                        bg = mix([153,27,27],[127,29,29],t);   // bad red gradient
+                                    }else if(v >= 1.05){
+                                        const t = (v-1.05)/0.10;
+                                        bg = mix([161,98,7],[180,83,9],t);     // ok amber gradient
+                                    }else if(v >= 1.00){
+                                        const t = (v-1.00)/0.05;
+                                        bg = mix([22,163,74],[101,163,13],t);  // nice green->lime
+                                    }else{
+                                        const t = Math.min((1.00-v)/0.15, 1.0);
+                                        bg = mix([34,197,94],[21,128,61],t);   // amazing deep green
+                                    }
+                                    return {'backgroundColor': bg, 'color':'#f8fafc', 'fontWeight':'700'};
+                                }
+                                """
+                            )
+                        else:
+                            # No explicit thresholds: use min->max gradient.
+                            style_js = JsCode(
+                                f"""
+                                function(p){{
+                                    const v = Number(p.value);
+                                    if(!Number.isFinite(v)) return {{}};
+                                    const min = {cmin};
+                                    const max = {cmax if cmax != cmin else cmin + 1.0};
+                                    const tRaw = (v - min) / (max - min);
+                                    const t = Math.max(0, Math.min(1, tRaw));
+                                    const r = Math.round(153 + (22-153)*t);
+                                    const g = Math.round(27 + (163-27)*t);
+                                    const b = Math.round(27 + (74-27)*t);
+                                    return {{'backgroundColor': `rgb(${{r}},${{g}},${{b}})`, 'color':'#f8fafc', 'fontWeight':'700'}};
+                                }}
+                                """
+                            )
+                        gb.configure_column(c, cellStyle=style_js)
 
             if "Win Rate" in gdf.columns:
                 gb.configure_column("Win Rate", valueFormatter=JsCode("function(p){const v=Number(p.value);return Number.isFinite(v)?(v*100).toFixed(2)+'%':'';}"))
@@ -4015,6 +4080,9 @@ def main() -> None:
                 ".ag-side-bar": {"background-color": "#081225", "border-left": "1px solid rgba(45,212,191,0.18)"},
                 ".ag-tool-panel-wrapper": {"background-color": "#081225", "color": "#cbd5e1"},
                 ".ag-tool-panel-wrapper *": {"color": "#cbd5e1"},
+                ".ag-column-drop-vertical": {"align-items": "flex-start !important", "justify-content": "flex-start !important"},
+                ".ag-column-drop-vertical .ag-column-drop-list": {"align-content": "flex-start !important", "justify-content": "flex-start !important"},
+                ".ag-column-drop-vertical .ag-column-drop-cell": {"margin-top": "4px"},
                 ".ag-checkbox-input-wrapper": {"opacity": "1 !important"},
                 ".ag-icon": {"color": "#cbd5e1 !important"},
                 ".ag-paging-panel": {"background-color": "#081225", "color": "#cbd5e1"},
