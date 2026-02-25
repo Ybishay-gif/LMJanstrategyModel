@@ -1021,6 +1021,7 @@ def build_model_tables(
     return rec, state_extra, state_seg_extra, channel_summary
 
 
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
 def simulate_mode_by_strategy(rec_df: pd.DataFrame, price_eval_df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
     mode_map = {
         "Strongest Momentum": "Max Growth",
@@ -1205,6 +1206,138 @@ def build_adjustment_candidates(price_eval_df: pd.DataFrame, state: str, channel
     return p, src
 
 
+def _build_popup_base_metrics(rec_df: pd.DataFrame) -> pd.DataFrame:
+    r = rec_df.copy()
+    wr_fb = pd.Series(np.where(r["Bids"] > 0, r["Clicks"] / r["Bids"], 0), index=r.index)
+    base_wr = r["Bids to Clicks"].combine_first(wr_fb).fillna(0)
+    c2b = r["Clicks to Binds Proxy"].combine_first(r.get("Clicks to Binds", np.nan)).fillna(0)
+    r["_base_clicks"] = r["Bids"].fillna(0) * base_wr
+    r["_base_binds_factor"] = r["_base_clicks"] * c2b
+    r["_base_click_cost_factor"] = r["_base_clicks"] * r["Avg. CPC"].fillna(0)
+    r["_click_cost_base"] = r["Clicks"].fillna(0) * r["Avg. CPC"].fillna(0)
+    r["_current_cost"] = np.where(r["Total Click Cost"].notna(), r["Total Click Cost"], r["Clicks"] * r["Avg. CPC"])
+
+    out = r.groupby(["State", "Channel Groups"], as_index=False).agg(
+        Current_Binds=("Binds", "sum"),
+        Current_Cost=("_current_cost", "sum"),
+        Base_Clicks=("_base_clicks", "sum"),
+        Base_Binds_Factor=("_base_binds_factor", "sum"),
+        Base_Click_Cost_Factor=("_base_click_cost_factor", "sum"),
+        Click_Cost_Base=("_click_cost_base", "sum"),
+    )
+    out["Current_CPB"] = np.where(out["Current_Binds"] > 0, out["Current_Cost"] / out["Current_Binds"], np.nan)
+    return out
+
+
+@st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
+def precompute_popup_options_all(
+    rec_df: pd.DataFrame,
+    price_eval_df: pd.DataFrame,
+    settings: Settings,
+) -> pd.DataFrame:
+    base = _build_popup_base_metrics(rec_df)
+    if base.empty or price_eval_df.empty:
+        return pd.DataFrame()
+
+    px = price_eval_df.copy()
+    cols = ["State", "Channel Groups", "Price Adjustment Percent", "Bids", "Clicks", "Win Rate Lift %", "CPC Lift %", "Stat Sig Price Point"]
+    px = px[[c for c in cols if c in px.columns]].copy()
+
+    st_cand = (
+        px.groupby(["State", "Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .agg(
+            Bids=("Bids", "sum"),
+            Clicks=("Clicks", "sum"),
+            **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
+            **{"CPC Lift %": ("CPC Lift %", "mean")},
+            **{"Stat Sig Price Point": ("Stat Sig Price Point", "max")},
+        )
+    )
+    ch_cand = (
+        px.groupby(["Channel Groups", "Price Adjustment Percent"], as_index=False)
+        .agg(
+            Bids=("Bids", "sum"),
+            Clicks=("Clicks", "sum"),
+            **{"Win Rate Lift %": ("Win Rate Lift %", "mean")},
+            **{"CPC Lift %": ("CPC Lift %", "mean")},
+            **{"Stat Sig Price Point": ("Stat Sig Price Point", "max")},
+        )
+    )
+
+    pairs = base[["State", "Channel Groups"]].drop_duplicates()
+    st_rows = pairs.merge(st_cand, on=["State", "Channel Groups"], how="left")
+    st_rows = st_rows[st_rows["Price Adjustment Percent"].notna()].copy()
+    st_rows["Source Used"] = "State+Channel"
+
+    fb_rows = pairs.merge(ch_cand, on=["Channel Groups"], how="left")
+    fb_rows = fb_rows[fb_rows["Price Adjustment Percent"].notna()].copy()
+    if not st_rows.empty:
+        keys = st_rows[["State", "Channel Groups", "Price Adjustment Percent"]].copy()
+        keys["_hit"] = 1
+        fb_rows = fb_rows.merge(keys, on=["State", "Channel Groups", "Price Adjustment Percent"], how="left")
+        fb_rows = fb_rows[fb_rows["_hit"].isna()].drop(columns=["_hit"])
+    fb_rows["Source Used"] = "Channel Fallback"
+
+    cand = pd.concat([st_rows, fb_rows], ignore_index=True)
+    if cand.empty:
+        return pd.DataFrame()
+
+    bids_sig = max(float(settings.min_bids_price_sig), 1.0)
+    clicks_sig = max(float(settings.min_clicks_price_sig), 1.0)
+    cand["Sig Score"] = np.minimum(cand["Bids"].fillna(0) / bids_sig, cand["Clicks"].fillna(0) / clicks_sig)
+    cand["Recommend Eligible"] = cand.get("Stat Sig Price Point", False).fillna(False).astype(bool)
+    cand["Sig Level"] = np.select(
+        [
+            cand["Recommend Eligible"] & (cand["Sig Score"] >= 2.5),
+            cand["Recommend Eligible"] & (cand["Sig Score"] >= 1.5),
+            cand["Recommend Eligible"],
+            (cand["Bids"].fillna(0) > 0) | (cand["Clicks"].fillna(0) > 0),
+        ],
+        ["Strong", "Medium", "Weak", "Poor"],
+        default="No Sig",
+    )
+    cand["Sig Icon"] = cand["Sig Level"].map(
+        {"Strong": "🟢", "Medium": "🟡", "Weak": "🟠", "Poor": "🟠", "No Sig": "⚪"}
+    ).fillna("⚪")
+
+    merged = cand.merge(base, on=["State", "Channel Groups"], how="inner")
+    wr_lift = pd.to_numeric(merged["Win Rate Lift %"], errors="coerce").fillna(0.0)
+    cpc_lift = pd.to_numeric(merged["CPC Lift %"], errors="coerce").fillna(0.0)
+    wr_effect = wr_lift if mode_factor(settings.optimization_mode) <= 0.5 else np.maximum(wr_lift, 0.0)
+    merged["Additional Clicks"] = merged["Base_Clicks"] * wr_effect
+    merged["Additional Binds"] = merged["Base_Binds_Factor"] * wr_effect
+    merged["Expected Total Cost"] = (
+        merged["Click_Cost_Base"] + merged["Base_Click_Cost_Factor"] * wr_effect
+    ) * (1.0 + cpc_lift)
+    merged["Additional Budget Needed"] = merged["Expected Total Cost"] - merged["Current_Cost"]
+    merged["New_CPB"] = np.where(
+        (merged["Current_Binds"] + merged["Additional Binds"]) > 0,
+        merged["Expected Total Cost"] / (merged["Current_Binds"] + merged["Additional Binds"]),
+        np.nan,
+    )
+    merged["CPB Impact"] = np.where(
+        merged["Current_CPB"] > 0,
+        merged["New_CPB"] / merged["Current_CPB"] - 1.0,
+        np.nan,
+    )
+
+    out = merged.rename(
+        columns={
+            "Price Adjustment Percent": "Bid Adj %",
+            "Bids": "Test Bids",
+            "Win Rate Lift %": "Win Rate Uplift",
+            "CPC Lift %": "CPC Uplift",
+        }
+    )
+    keep = [
+        "State", "Channel Groups", "Bid Adj %", "Sig Icon", "Sig Level", "Source Used",
+        "Test Bids", "Win Rate Uplift", "CPC Uplift", "Additional Clicks", "Additional Binds",
+        "Expected Total Cost", "Additional Budget Needed", "CPB Impact", "Recommend Eligible",
+    ]
+    out = out[[c for c in keep if c in out.columns]].copy()
+    return out.sort_values(["State", "Channel Groups", "Bid Adj %"]).reset_index(drop=True)
+
+
 @st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
 def build_popup_card_options(
     rec_df: pd.DataFrame,
@@ -1213,46 +1346,17 @@ def build_popup_card_options(
     channel_group: str,
     settings: Settings,
 ) -> tuple[pd.DataFrame, str]:
-    candidates, source_used = build_adjustment_candidates(price_eval_df, state, channel_group, settings)
-    rsel = rec_df[(rec_df["State"] == state) & (rec_df["Channel Groups"] == channel_group)].copy()
-    if candidates.empty or rsel.empty:
-        return pd.DataFrame(), source_used
-
-    wr_fb = pd.Series(np.where(rsel["Bids"] > 0, rsel["Clicks"] / rsel["Bids"], 0), index=rsel.index)
-    base_wr = rsel["Bids to Clicks"].combine_first(wr_fb).fillna(0)
-    c2b = rsel["Clicks to Binds Proxy"].fillna(rsel.get("Clicks to Binds", 0)).fillna(0)
-    cur_cost = float(np.nansum(np.where(rsel["Total Click Cost"].notna(), rsel["Total Click Cost"], rsel["Clicks"] * rsel["Avg. CPC"])))
-    cur_binds = float(rsel["Binds"].fillna(0).sum())
-    cur_cpb = (cur_cost / cur_binds) if cur_binds > 0 else np.nan
-
-    out_rows = []
-    allow_negative_moves = mode_factor(settings.optimization_mode) <= 0.5
-    for _, cr in candidates.sort_values("Price Adjustment Percent").iterrows():
-        wr_l = as_float(cr.get("Win Rate Lift %", 0), 0.0)
-        cpc_l = as_float(cr.get("CPC Lift %", 0), 0.0)
-        wr_effect = wr_l if allow_negative_moves else max(wr_l, 0)
-        add_clicks = float((rsel["Bids"].fillna(0) * base_wr * wr_effect).sum())
-        add_binds = float((rsel["Bids"].fillna(0) * base_wr * wr_effect * c2b).sum())
-        exp_cost = float(((rsel["Clicks"] + (rsel["Bids"] * base_wr * wr_effect)) * rsel["Avg. CPC"] * (1 + cpc_l)).sum())
-        new_cpb = (exp_cost / (cur_binds + add_binds)) if (cur_binds + add_binds) > 0 else np.nan
-        cpb_impact = (new_cpb / cur_cpb - 1) if pd.notna(new_cpb) and pd.notna(cur_cpb) and cur_cpb > 0 else np.nan
-        out_rows.append(
-            {
-                "Bid Adj %": float(cr["Price Adjustment Percent"]),
-                "Sig Icon": cr.get("Sig Icon", "⚪"),
-                "Sig Level": cr.get("Sig Level", "n/a"),
-                "Source Used": str(cr.get("Source Used", source_used)),
-                "Test Bids": float(cr.get("Bids", 0) or 0),
-                "Win Rate Uplift": wr_l,
-                "CPC Uplift": cpc_l,
-                "Additional Clicks": add_clicks,
-                "Additional Binds": add_binds,
-                "Expected Total Cost": exp_cost,
-                "Additional Budget Needed": exp_cost - cur_cost,
-                "CPB Impact": cpb_impact,
-            }
-        )
-    return pd.DataFrame(out_rows), source_used
+    all_opts = precompute_popup_options_all(rec_df, price_eval_df, settings)
+    if all_opts.empty:
+        return pd.DataFrame(), "None"
+    out = all_opts[
+        (all_opts["State"].astype(str) == str(state))
+        & (all_opts["Channel Groups"].astype(str) == str(channel_group))
+    ].copy()
+    if out.empty:
+        return pd.DataFrame(), "None"
+    src = "Mixed" if out["Source Used"].nunique() > 1 else str(out["Source Used"].iloc[0])
+    return out.drop(columns=["State"], errors="ignore"), src
 
 
 @st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
@@ -1262,23 +1366,11 @@ def precompute_popup_options_for_state(
     state: str,
     settings: Settings,
 ) -> pd.DataFrame:
-    s = rec_df[rec_df["State"] == state]
-    channels = sorted(s["Channel Groups"].dropna().unique().tolist())
-    rows = []
-    for ch in channels:
-        p, src = build_popup_card_options(rec_df, price_eval_df, state, ch, settings)
-        if p.empty:
-            continue
-        p = p.copy()
-        p["Channel Groups"] = ch
-        p["Source Used"] = src
-        rows.append(p)
-    if not rows:
+    all_opts = precompute_popup_options_all(rec_df, price_eval_df, settings)
+    if all_opts.empty:
         return pd.DataFrame()
-    out = pd.concat(rows, ignore_index=True)
-    if "Source Used" not in out.columns:
-        out["Source Used"] = "Unknown"
-    return out
+    out = all_opts[all_opts["State"].astype(str) == str(state)].copy()
+    return out.drop(columns=["State"], errors="ignore").reset_index(drop=True)
 
 
 @st.cache_data(show_spinner=False, hash_funcs={Settings: lambda s: tuple(vars(s).items())})
@@ -2258,7 +2350,6 @@ def main() -> None:
                 ok_so, err_so = save_state_strategy_overrides(next_overrides)
                 if ok_so:
                     st.success("State strategy saved.")
-                    st.cache_data.clear()
                     st.rerun()
                 else:
                     st.error(err_so)
@@ -2314,7 +2405,6 @@ def main() -> None:
             ok_sp, err_sp = save_strategy_profiles(next_profiles)
             if ok_sp:
                 st.success("Strategy settings saved.")
-                st.cache_data.clear()
                 st.rerun()
             else:
                 st.error(err_sp)
@@ -2339,7 +2429,6 @@ def main() -> None:
                     ok_ns, err_ns = save_strategy_profiles(updated)
                     if ok_ns:
                         st.success(f"Added strategy `{nm}`.")
-                        st.cache_data.clear()
                         st.rerun()
                     else:
                         st.error(err_ns)
