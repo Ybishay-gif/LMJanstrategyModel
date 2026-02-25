@@ -3452,6 +3452,84 @@ def main() -> None:
                         if sdet.empty:
                             st.info("No detail points found for the selected card.")
                         else:
+                            # Top-right manual adjustment selector (same override model as Tab 1), auto-saved on change.
+                            rec_adj = np.nan
+                            if not sel_rows.empty and "Suggested Price Adjustment %" in sel_rows.columns:
+                                rec_adj = float(pd.to_numeric(sel_rows["Suggested Price Adjustment %"], errors="coerce").median())
+                            elif not sel_rows.empty and "Applied Price Adjustment %" in sel_rows.columns:
+                                rec_adj = float(pd.to_numeric(sel_rows["Applied Price Adjustment %"], errors="coerce").median())
+                            if pd.isna(rec_adj):
+                                rec_adj = 0.0
+
+                            override_obj = st.session_state.get("bid_overrides", {}).get(okey, {})
+                            manual_req_adj = np.nan
+                            if isinstance(override_obj, dict) and bool(override_obj.get("apply", False)):
+                                manual_req_adj = as_float(override_obj.get("requested_adj", override_obj.get("adj", np.nan)), np.nan)
+                            effective_adj = manual_req_adj if not pd.isna(manual_req_adj) else rec_adj
+
+                            sdet_opts = sdet.sort_values("Bid Adj %").copy()
+                            label_to_adj_tab4: dict[str, float] = {}
+                            option_labels_tab4: list[str] = []
+                            for _, op in sdet_opts.iterrows():
+                                adj = as_float(op.get("Bid Adj %", 0.0), 0.0)
+                                wr_u = as_float(op.get("Win Rate Uplift", 0.0), 0.0)
+                                cpc_u = as_float(op.get("CPC Uplift", 0.0), 0.0)
+                                add_b = as_float(op.get("Additional Binds", 0.0), 0.0)
+                                sig = str(op.get("Sig Level", "n/a"))
+                                lbl = f"{adj:+.0f}%: {wr_u:+.1%} WR || {cpc_u:+.1%} CPC || {add_b:+.2f} Binds ({sig})"
+                                option_labels_tab4.append(lbl)
+                                label_to_adj_tab4[lbl] = adj
+
+                            # Ensure current effective value is always selectable.
+                            if not any(close_adj(v, effective_adj) for v in label_to_adj_tab4.values()):
+                                fallback_lbl = f"{effective_adj:+.0f}%: current selection"
+                                option_labels_tab4 = [fallback_lbl] + option_labels_tab4
+                                label_to_adj_tab4[fallback_lbl] = effective_adj
+
+                            cur_label = next(
+                                (lb for lb, v in label_to_adj_tab4.items() if close_adj(v, effective_adj)),
+                                option_labels_tab4[0] if option_labels_tab4 else f"{effective_adj:+.0f}%: current selection",
+                            )
+
+                            hdr_left, hdr_right = st.columns([1.4, 1.0])
+                            with hdr_left:
+                                st.markdown("&nbsp;", unsafe_allow_html=True)
+                            with hdr_right:
+                                chosen_label = st.selectbox(
+                                    "Bid Adjustment (Manual Override)",
+                                    options=option_labels_tab4,
+                                    index=max(0, option_labels_tab4.index(cur_label)) if option_labels_tab4 else 0,
+                                    key=f"tab4_adj_select_{state_s}_{channel_s}",
+                                    help="Change bid adjustment for this state + channel. Saved immediately.",
+                                )
+
+                            chosen_adj = as_float(label_to_adj_tab4.get(chosen_label, effective_adj), effective_adj)
+                            if not close_adj(chosen_adj, effective_adj):
+                                new_overrides = dict(st.session_state.get("bid_overrides", {}))
+                                if close_adj(chosen_adj, rec_adj):
+                                    new_overrides.pop(okey, None)
+                                else:
+                                    new_overrides[okey] = {
+                                        "apply": True,
+                                        "adj": float(chosen_adj),
+                                        "requested_adj": float(chosen_adj),
+                                        "source": "manual",
+                                    }
+                                ok_save, err_save = save_overrides_to_disk(new_overrides)
+                                if ok_save:
+                                    st.session_state["bid_overrides"] = new_overrides
+                                    st.session_state["tab4_save_notice"] = (
+                                        f"Saved manual adjustment for {state_s} · {channel_s}: {chosen_adj:+.0f}%"
+                                        if not close_adj(chosen_adj, rec_adj)
+                                        else f"Reset to platform recommendation for {state_s} · {channel_s}."
+                                    )
+                                else:
+                                    st.session_state["tab4_save_notice"] = err_save or "Failed to save manual override."
+                                st.rerun()
+
+                            if st.session_state.get("tab4_save_notice"):
+                                st.success(st.session_state.pop("tab4_save_notice"))
+
                             seg_row = state_seg_df[
                                 (state_seg_df["State"] == state_s) & (state_seg_df["Segment"] == segment_s)
                             ].head(1)
