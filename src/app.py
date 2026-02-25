@@ -380,6 +380,14 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
     def _lookup(row: pd.Series) -> pd.Series:
         key_sc = (str(row.get("State", "")), str(row.get("Channel Groups", "")))
         srow = _pick_from_curve(state_curves.get(key_sc), row)
+        crow = _pick_from_curve(ch_curves.get(str(row.get("Channel Groups", ""))), row)
+        if srow is not None and crow is not None:
+            s_adj = float(srow.get("Price Adjustment Percent", 0.0) or 0.0)
+            c_adj = float(crow.get("Price Adjustment Percent", 0.0) or 0.0)
+            # If state-level has only baseline while channel-level has a valid non-zero
+            # point, prefer the channel fallback in growth/balanced modes.
+            if abs(s_adj) <= 1e-9 and abs(c_adj) > 1e-9 and mode_factor(settings.optimization_mode) >= 0.5:
+                srow = crow
         if srow is not None:
             return pd.Series(
                 [
@@ -391,7 +399,6 @@ def _assign_best_price_points(rec: pd.DataFrame, price_eval_df: pd.DataFrame, se
                     True,
                 ]
             )
-        crow = _pick_from_curve(ch_curves.get(str(row.get("Channel Groups", ""))), row)
         if crow is not None:
             return pd.Series(
                 [
@@ -431,16 +438,41 @@ def apply_price_effects(
 ) -> pd.DataFrame:
     state_dict, effect_dict = _build_effect_dicts(price_eval_df, settings)
 
-    def lookup(row: pd.Series) -> pd.Series:
-        g = state_dict.get((str(row.get("State", "")), str(row["Channel Groups"])))
+    def _has_adj(g: Optional[pd.DataFrame], target: float) -> bool:
+        if g is None or g.empty or "Price Adjustment Percent" not in g.columns:
+            return False
+        vals = pd.to_numeric(g["Price Adjustment Percent"], errors="coerce").dropna()
+        if vals.empty:
+            return False
+        return bool((vals - float(target)).abs().le(1e-9).any())
+
+    def _nearest_from(g: Optional[pd.DataFrame], target: float) -> Optional[pd.Series]:
         if g is None or g.empty:
-            g = effect_dict.get(str(row["Channel Groups"]))
-        if g is None or g.empty:
-            return pd.Series([0.0, 0.0, 0.0, 0.0])
-        target = row["Suggested Price Adjustment %"]
+            return None
         g2 = g.copy()
-        g2["dist"] = (g2["Price Adjustment Percent"] - target).abs()
-        near = g2.sort_values(["dist", "Price Adjustment Percent"], ascending=[True, True]).iloc[0]
+        g2["dist"] = (pd.to_numeric(g2["Price Adjustment Percent"], errors="coerce").fillna(0.0) - float(target)).abs()
+        return g2.sort_values(["dist", "Price Adjustment Percent"], ascending=[True, True]).iloc[0]
+
+    def lookup(row: pd.Series) -> pd.Series:
+        target = float(row.get("Suggested Price Adjustment %", 0.0) or 0.0)
+        g_state = state_dict.get((str(row.get("State", "")), str(row["Channel Groups"])))
+        g_ch = effect_dict.get(str(row["Channel Groups"]))
+
+        # Prefer exact-match source for the suggested adjustment.
+        # This avoids snapping non-zero channel fallback suggestions back to 0%
+        # just because state-level has only baseline data.
+        near = None
+        if _has_adj(g_state, target):
+            near = _nearest_from(g_state, target)
+        elif _has_adj(g_ch, target):
+            near = _nearest_from(g_ch, target)
+        else:
+            # No exact point in either: keep state nearest if available, otherwise channel.
+            near = _nearest_from(g_state, target)
+            if near is None:
+                near = _nearest_from(g_ch, target)
+        if near is None:
+            return pd.Series([0.0, 0.0, 0.0, 0.0])
         return pd.Series(
             [
                 near["Price Adjustment Percent"],
