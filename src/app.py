@@ -1907,6 +1907,10 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             border-right: 1px solid rgba(131, 147, 168, 0.22);
             background: linear-gradient(180deg, #252935 0%, #1c1f29 100%);
         }
+        section[data-testid="stSidebar"] > div:first-child,
+        div[data-testid="stSidebarContent"] {
+            padding-top: 3.2rem !important;
+        }
         section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] {
             border-radius: 10px;
             padding-top: 4px;
