@@ -1862,6 +1862,32 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         <style>
         [data-testid="stSidebarNav"] {display:none;}
         .side-mini-note { color:#93c5fd; font-size:.8rem; opacity:.9; }
+        section[data-testid="stSidebar"] {
+            border-right: 1px solid rgba(131, 147, 168, 0.22);
+            background: linear-gradient(180deg, #060d1b 0%, #050a16 100%);
+        }
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+            gap: 0.35rem;
+        }
+        section[data-testid="stSidebar"] .stButton > button {
+            border-radius: 12px;
+            border: 1px solid rgba(131, 147, 168, 0.35);
+            background: rgba(20, 29, 45, 0.9);
+            color: #dbe7ff;
+            min-height: 36px;
+        }
+        section[data-testid="stSidebar"] .stButton > button:hover {
+            border-color: rgba(131, 147, 168, 0.6);
+            background: rgba(31, 44, 66, 0.95);
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] {
+            border-radius: 10px;
+            padding-top: 2px;
+            padding-bottom: 2px;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {
+            background: rgba(38, 55, 82, 0.55);
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1992,8 +2018,8 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         st.markdown(
             """
             <style>
-            [data-testid="stSidebar"] { min-width: 72px !important; max-width: 72px !important; }
-            section[data-testid="stSidebar"] > div:first-child { width: 72px !important; }
+            [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; }
+            section[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
             [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
             </style>
             """,
