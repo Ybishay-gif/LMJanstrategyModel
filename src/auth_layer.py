@@ -15,7 +15,12 @@ import streamlit as st
 
 from config import AUTH_USERS_PATH, AUTH_ALLOWLIST_PATH, ADMIN_EMAIL, SESSION_TTL_DAYS
 from ui_utils import render_formatted_table
-from storage_layer import load_auth_users_store, save_auth_users_store
+from storage_layer import (
+    load_auth_users_store,
+    save_auth_users_store,
+    load_allowed_emails_store,
+    save_allowed_emails_store,
+)
 
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
@@ -23,6 +28,10 @@ def normalize_email(email: str) -> str:
 
 def load_allowed_emails() -> set[str]:
     out: set[str] = set()
+    try:
+        out.update(load_allowed_emails_store())
+    except Exception:
+        pass
     raw_env = os.getenv("APP_ALLOWED_EMAILS", "")
     if raw_env:
         out.update({normalize_email(x) for x in raw_env.split(",") if normalize_email(x)})
@@ -41,13 +50,17 @@ def load_allowed_emails() -> set[str]:
 
 
 def save_allowed_emails(emails: set[str]) -> tuple[bool, str]:
+    normalized = {normalize_email(e) for e in (emails or set()) if normalize_email(e)}
+    ok_store, err_store = save_allowed_emails_store(normalized)
+    if not ok_store:
+        return False, err_store or "Failed to save allowlist."
     try:
         AUTH_ALLOWLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        rows = sorted({normalize_email(e) for e in emails if normalize_email(e)})
+        rows = sorted(normalized)
         AUTH_ALLOWLIST_PATH.write_text("\n".join(rows) + ("\n" if rows else ""))
         return True, ""
     except Exception:
-        return False, "Failed to save allowlist."
+        return False, "Failed to save local allowlist mirror."
 
 
 def now_iso() -> str:

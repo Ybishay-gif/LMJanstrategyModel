@@ -12,6 +12,7 @@ ANALYTICS_PRESETS_PATH = Path("data/analytics_presets.json")
 STATE_STRATEGY_OVERRIDES_PATH = Path("data/state_strategy_overrides.json")
 STRATEGY_PROFILES_PATH = Path("data/strategy_profiles.json")
 AUTH_USERS_STORAGE_PATH = AUTH_USERS_PATH
+ALLOWED_EMAILS_STORAGE_PATH = Path("data/allowed_emails_store.json")
 
 
 def _get_secret(name: str) -> str:
@@ -160,6 +161,20 @@ def _clean_any(data: dict) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _clean_allowed_emails_store(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return {"emails": []}
+    vals = data.get("emails", [])
+    if not isinstance(vals, list):
+        vals = []
+    out: list[str] = []
+    for v in vals:
+        e = str(v or "").strip().lower()
+        if e and "@" in e and e not in out:
+            out.append(e)
+    return {"emails": out}
+
+
 def _load_json(path: Path, cleaner: Callable[[dict], dict]) -> dict:
     cfg = _github_cfg()
     if cfg["enabled"]:
@@ -255,4 +270,23 @@ def save_auth_users_store(users: dict) -> tuple[bool, str]:
         _clean_any,
         "Update auth users",
         "Failed to save user credentials.",
+    )
+
+
+def load_allowed_emails_store() -> set[str]:
+    data = _load_json(ALLOWED_EMAILS_STORAGE_PATH, _clean_allowed_emails_store)
+    vals = data.get("emails", []) if isinstance(data, dict) else []
+    if not isinstance(vals, list):
+        return set()
+    return {str(v).strip().lower() for v in vals if str(v).strip()}
+
+
+def save_allowed_emails_store(emails: set[str]) -> tuple[bool, str]:
+    payload = {"emails": sorted({str(e).strip().lower() for e in (emails or set()) if str(e).strip()})}
+    return _save_json(
+        ALLOWED_EMAILS_STORAGE_PATH,
+        payload,
+        _clean_allowed_emails_store,
+        "Update allowed emails",
+        "Failed to save allowlist.",
     )
