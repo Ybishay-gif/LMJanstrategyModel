@@ -2021,16 +2021,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
 
     plotly_template = "plotly_dark" if dark_mode else "plotly_white"
 
-    st.title("Insurance Growth Navigator")
-    st.markdown(
-        """
-        <div class="hero-card">
-        <h4>🚀 Growth Meets Profitability</h4>
-        <div class="tiny-note">🧭 State momentum map • 📈 Channel insights • 🎯 Bid adjustment recommendations</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     tab_labels = list(VIEW_TO_LABEL.values())
     if forced_view:
         selected_tab = VIEW_TO_LABEL.get(str(forced_view), VIEW_TO_LABEL["tab0"])
