@@ -1890,6 +1890,10 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
     user_now = normalize_email(st.session_state.get("auth_user", ""))
     is_admin = current_user_is_admin()
     view = qp_value("view", "main").strip().lower() or "main"
+    if not multipage_mode and not st.session_state.get("_root_page_redirected", False):
+        st.session_state["_root_page_redirected"] = True
+        st.switch_page("pages/01_Executive_State_View.py")
+        return
 
     dark_mode = bool(st.session_state.get("cfg_dark_mode", True))
     fast_mode = bool(st.session_state.get("cfg_fast_mode", True))
@@ -1924,8 +1928,20 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             opacity: 0.85;
             font-weight: 700;
             font-size: 0.95rem;
-            margin-top: 0.25rem;
-            margin-bottom: 0.25rem;
+            display: block;
+            position: relative;
+            z-index: 3;
+            margin-top: 0.35rem;
+            margin-bottom: 0.45rem;
+            padding-top: 0.1rem;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink"] {
+            margin-top: 0.1rem;
+            margin-bottom: 0.1rem;
+        }
+        section[data-testid="stSidebar"] hr {
+            margin-top: 0.95rem !important;
+            margin-bottom: 0.95rem !important;
         }
         header[data-testid="stHeader"] {
             left: 0 !important;
