@@ -1864,6 +1864,8 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         [data-testid="stSidebarNav"] {display:none;}
         [data-testid="collapsedControl"] {display:none !important;}
         [data-testid="stSidebarCollapsedControl"] {display:none !important;}
+        button[aria-label="Open sidebar"] {display:none !important;}
+        button[aria-label="Close sidebar"] {display:none !important;}
         .side-mini-note { color:#93c5fd; font-size:.8rem; opacity:.9; }
         section[data-testid="stSidebar"] {
             border-right: 1px solid rgba(131, 147, 168, 0.22);
@@ -2021,7 +2023,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             section[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
             [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
             [data-testid="stSidebar"] .st-emotion-cache-6qob1r { padding-left: 6px; padding-right: 6px; }
-            [data-testid="stAppViewContainer"] > .main { margin-left: 53px !important; }
             </style>
             """,
             unsafe_allow_html=True,
@@ -2032,7 +2033,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             <style>
             [data-testid="stSidebar"] { min-width: 280px !important; max-width: 280px !important; }
             section[data-testid="stSidebar"] > div:first-child { width: 280px !important; }
-            [data-testid="stAppViewContainer"] > .main { margin-left: 280px !important; }
             </style>
             """,
             unsafe_allow_html=True,
