@@ -1871,6 +1871,16 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             border-right: 1px solid rgba(131, 147, 168, 0.22);
             background: linear-gradient(180deg, #060d1b 0%, #050a16 100%);
         }
+        [data-testid="stAppViewContainer"] > .main {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin-left: 0 !important;
+        }
+        [data-testid="stAppViewContainer"] > .main .block-container {
+            max-width: 100% !important;
+            padding-left: 1.4rem !important;
+            padding-right: 1.4rem !important;
+        }
         section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
             gap: 0.35rem;
         }
@@ -2021,8 +2031,16 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             <style>
             [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; }
             section[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
+            section[data-testid="stSidebar"] {
+                position: fixed !important;
+                left: 0 !important;
+                top: 0 !important;
+                bottom: 0 !important;
+                z-index: 999 !important;
+            }
             [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
             [data-testid="stSidebar"] .st-emotion-cache-6qob1r { padding-left: 6px; padding-right: 6px; }
+            [data-testid="stAppViewContainer"] { padding-left: 0 !important; }
             </style>
             """,
             unsafe_allow_html=True,
