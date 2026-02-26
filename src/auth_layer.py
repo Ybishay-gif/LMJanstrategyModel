@@ -20,6 +20,7 @@ from storage_layer import (
     save_auth_users_store,
     load_allowed_emails_store,
     save_allowed_emails_store,
+    persistence_backend_name,
 )
 
 def normalize_email(email: str) -> str:
@@ -324,6 +325,11 @@ def render_auth_gate() -> bool:
             del st.query_params["invite_token"]
 
     st.title("🔐 Beacon planner")
+    backend = persistence_backend_name()
+    if backend != "github":
+        st.warning("Auth storage backend is `local` (ephemeral on redeploy). Configure GitHub persistence secrets.")
+    else:
+        st.caption("Auth storage backend: `github`")
     if not allowed:
         st.error("No allowlist configured. Add emails to `data/allowed_emails.txt`.")
         return False
