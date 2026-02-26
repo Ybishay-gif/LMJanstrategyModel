@@ -1932,34 +1932,83 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
     if not bool(st.session_state.get("ui_menu_pinned", True)):
         st.session_state["ui_menu_minimized"] = True
 
-    page_links = [
-        ("pages/01_Executive_State_View.py", VIEW_TO_LABEL["tab0"], "🏁"),
-        ("pages/02_Plan_Settings.py", VIEW_TO_LABEL["settings"], "⚙️"),
-        ("pages/03_State_Momentum_Map.py", VIEW_TO_LABEL["tab1"], "🗺️"),
-        ("pages/04_Channel_Group_Analysis.py", VIEW_TO_LABEL["tab2"], "📊"),
-        ("pages/05_Channel_Group_and_States.py", VIEW_TO_LABEL["tab3"], "🧠"),
-        ("pages/06_Price_Exploration_Details.py", VIEW_TO_LABEL["tab4"], "🧪"),
-        ("pages/07_General_Analytics.py", VIEW_TO_LABEL["tab5"], "📚"),
-        ("pages/08_Neon_Insights_Cockpit.py", VIEW_TO_LABEL["neon"], "🌌"),
-        ("pages/09_Configuration.py", VIEW_TO_LABEL["config"], "🛠️"),
-        ("pages/10_User_Management.py", VIEW_TO_LABEL["user_mgmt"], "👥"),
+    page_sections = [
+        (
+            "Explore",
+            [
+                ("pages/01_Executive_State_View.py", "Executive View", "🎯"),
+                ("pages/03_State_Momentum_Map.py", "State Momentum", "🗺️"),
+                ("pages/04_Channel_Group_Analysis.py", "Channel Analysis", "📊"),
+                ("pages/05_Channel_Group_and_States.py", "Channel + State", "🧠"),
+                ("pages/06_Price_Exploration_Details.py", "Price Exploration", "🧪"),
+                ("pages/08_Neon_Insights_Cockpit.py", "Neon Insights", "🌌"),
+            ],
+        ),
+        (
+            "Manage",
+            [
+                ("pages/07_General_Analytics.py", "General Analytics", "📚"),
+                ("pages/02_Plan_Settings.py", "Plan Settings", "⚙️"),
+                ("pages/09_Configuration.py", "Configuration", "🛠️"),
+            ],
+        ),
+        (
+            "System",
+            [
+                ("pages/10_User_Management.py", "User Management", "👥"),
+            ],
+        ),
     ]
 
     with st.sidebar:
-        st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
-        cmin, cpin = st.columns(2)
-        cmin.toggle("Minimize", key="ui_menu_minimized")
-        cpin.toggle("Pin", key="ui_menu_pinned")
         minimized = bool(st.session_state.get("ui_menu_minimized", False))
+        c_toggle, c_pin = st.columns([1, 1])
+        arrow = "❯" if minimized else "❮"
+        if c_toggle.button(arrow, key="menu_min_toggle", help="Collapse/Expand menu", use_container_width=True):
+            st.session_state["ui_menu_minimized"] = not minimized
+            st.rerun()
+        c_pin.toggle("📌", key="ui_menu_pinned")
+        minimized = bool(st.session_state.get("ui_menu_minimized", False))
+
+        if minimized:
+            st.caption(" ")
+        else:
+            st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
         st.divider()
-        for path, lbl, icon in page_links:
-            st.page_link(path, label=(icon if minimized else f"{icon} {lbl}"))
-        st.divider()
-        if st.button("🚪 Logout", use_container_width=True, key="sidebar_logout_btn"):
+
+        for section_name, rows in page_sections:
+            if not minimized:
+                st.markdown(f"**{section_name}**")
+            for path, lbl, icon in rows:
+                st.page_link(path, label=(" " if minimized else lbl), icon=icon)
+            st.divider()
+
+        if st.button(("🚪" if minimized else "🚪 Logout"), use_container_width=True, key="sidebar_logout_btn"):
             perform_logout()
             return
-        if minimized:
-            st.caption("Menu in icon-only mode")
+
+    minimized = bool(st.session_state.get("ui_menu_minimized", False))
+    if minimized:
+        st.markdown(
+            """
+            <style>
+            [data-testid="stSidebar"] { min-width: 72px !important; max-width: 72px !important; }
+            section[data-testid="stSidebar"] > div:first-child { width: 72px !important; }
+            [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <style>
+            [data-testid="stSidebar"] { min-width: 280px !important; max-width: 280px !important; }
+            section[data-testid="stSidebar"] > div:first-child { width: 280px !important; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
     data_mode = str(st.session_state.get("cfg_data_mode", "Repo data (GitHub)"))
     strategy_upload = st.session_state.get("cfg_strategy_upload")
