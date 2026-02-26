@@ -2087,20 +2087,12 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; width: 53px !important; }
             section[data-testid="stSidebar"] > div:first-child,
             div[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
-            section[data-testid="stSidebar"],
-            div[data-testid="stSidebar"] {
-                position: fixed !important;
-                left: 0 !important;
-                top: 0 !important;
-                bottom: 0 !important;
-                z-index: 999 !important;
-            }
             [data-testid="stAppViewContainer"] {
-                grid-template-columns: 0px 1fr !important;
+                grid-template-columns: 53px 1fr !important;
                 padding-left: 0 !important;
                 margin-left: 0 !important;
-                width: 100vw !important;
-                max-width: 100vw !important;
+                width: 100% !important;
+                max-width: 100% !important;
             }
             section.main,
             [data-testid="stMain"],
@@ -2135,6 +2127,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             <style>
             [data-testid="stSidebar"] { min-width: 280px !important; max-width: 280px !important; }
             section[data-testid="stSidebar"] > div:first-child { width: 280px !important; }
+            [data-testid="stAppViewContainer"] { grid-template-columns: 280px 1fr !important; }
             </style>
             """,
             unsafe_allow_html=True,
