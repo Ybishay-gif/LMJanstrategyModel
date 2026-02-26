@@ -62,7 +62,15 @@ def _github_get_json(local_path: Path) -> tuple[Optional[dict], Optional[str], s
         return None, None, "GitHub persistence not configured."
     remote_path = _join_remote_path(local_path)
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{remote_path}?ref={cfg['branch']}"
-    req = Request(url, headers={"Authorization": f"Bearer {cfg['token']}", "Accept": "application/vnd.github+json"})
+    req = Request(
+        url,
+        headers={
+            "Authorization": f"token {cfg['token']}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "beacon-planner/1.0",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
     try:
         with urlopen(req, timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
@@ -75,9 +83,14 @@ def _github_get_json(local_path: Path) -> tuple[Optional[dict], Optional[str], s
             return {}, payload.get("sha"), ""
         return data, payload.get("sha"), ""
     except HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
         if e.code == 404:
             return {}, None, ""
-        return None, None, f"GitHub read failed ({e.code})."
+        return None, None, f"GitHub read failed ({e.code}). {body[:240]}"
     except URLError:
         return None, None, "GitHub read failed (network)."
     except Exception:
@@ -105,13 +118,23 @@ def _github_put_json(local_path: Path, data: dict, message: str) -> tuple[bool, 
         url,
         data=json.dumps(body).encode("utf-8"),
         method="PUT",
-        headers={"Authorization": f"Bearer {cfg['token']}", "Accept": "application/vnd.github+json"},
+        headers={
+            "Authorization": f"token {cfg['token']}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "beacon-planner/1.0",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
     )
     try:
         with urlopen(req, timeout=15):
             return True, ""
     except HTTPError as e:
-        return False, f"GitHub write failed ({e.code})."
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        return False, f"GitHub write failed ({e.code}). {body[:240]}"
     except URLError:
         return False, "GitHub write failed (network)."
     except Exception:
