@@ -21,12 +21,33 @@ from storage_layer import (
     load_allowed_emails_store,
     save_allowed_emails_store,
     persistence_backend_name,
-    get_allowed_email_role,
-    get_allowed_email_records,
-    upsert_allowed_email_record,
-    set_allowed_email_active,
-    append_audit_log,
 )
+
+try:
+    from storage_layer import (
+        get_allowed_email_role,
+        get_allowed_email_records,
+        upsert_allowed_email_record,
+        set_allowed_email_active,
+        append_audit_log,
+    )
+except Exception:
+    # Backward-compatible fallbacks when older storage_layer.py is deployed.
+    def get_allowed_email_role(email: str) -> str:
+        e = str(email or "").strip().lower()
+        return "ADMIN" if e == str(ADMIN_EMAIL or "").strip().lower() else "VIEWER"
+
+    def get_allowed_email_records() -> list[dict]:
+        return []
+
+    def upsert_allowed_email_record(email: str, role: str = "VIEWER", is_active: bool = True) -> tuple[bool, str]:
+        return False, "Role persistence is unavailable in this deployment."
+
+    def set_allowed_email_active(email: str, is_active: bool) -> tuple[bool, str]:
+        return False, "Role persistence is unavailable in this deployment."
+
+    def append_audit_log(email: str, action: str, target: str = "", metadata: Optional[dict] = None) -> tuple[bool, str]:
+        return True, ""
 
 
 def _is_cloud_runtime() -> bool:
