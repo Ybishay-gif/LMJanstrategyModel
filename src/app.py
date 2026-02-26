@@ -1893,11 +1893,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
     st.markdown(
         """
         <style>
-        [data-testid="stSidebarNav"] {display:none;}
-        [data-testid="collapsedControl"] {display:none !important;}
-        [data-testid="stSidebarCollapsedControl"] {display:none !important;}
-        button[aria-label="Open sidebar"] {display:none !important;}
-        button[aria-label="Close sidebar"] {display:none !important;}
         .side-mini-note { color:#93c5fd; font-size:.8rem; opacity:.9; }
         section[data-testid="stSidebar"] {
             border-right: 1px solid rgba(131, 147, 168, 0.22);
@@ -2022,115 +2017,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             options=tab_labels,
             horizontal=True,
             key="main_view_tab",
-        )
-    if not bool(st.session_state.get("ui_menu_pinned", True)):
-        st.session_state["ui_menu_minimized"] = True
-
-    page_sections = [
-        (
-            "Explore",
-            [
-                ("pages/01_Executive_State_View.py", "Executive View", "🎯"),
-                ("pages/03_State_Momentum_Map.py", "State Momentum", "🗺️"),
-                ("pages/04_Channel_Group_Analysis.py", "Channel Analysis", "📊"),
-                ("pages/05_Channel_Group_and_States.py", "Channel + State", "🧠"),
-                ("pages/06_Price_Exploration_Details.py", "Price Exploration", "🧪"),
-                ("pages/07_General_Analytics.py", "General Analytics", "📚"),
-                ("pages/08_Neon_Insights_Cockpit.py", "Neon Insights", "🌌"),
-            ],
-        ),
-        (
-            "Manage",
-            [
-                ("pages/02_Plan_Settings.py", "Plan Settings", "⚙️"),
-                ("pages/09_Configuration.py", "Configuration", "🛠️"),
-            ],
-        ),
-        (
-            "System",
-            [
-                ("pages/10_User_Management.py", "User Management", "👥"),
-                ("pages/11_Logout.py", "Logout", "🚪"),
-            ],
-        ),
-    ]
-
-    with st.sidebar:
-        minimized = bool(st.session_state.get("ui_menu_minimized", False))
-        c_toggle = st.columns([1])[0]
-        arrow = "❯" if minimized else "❮"
-        if c_toggle.button(arrow, key="menu_min_toggle", help="Collapse/Expand menu", use_container_width=True):
-            st.session_state["ui_menu_minimized"] = not minimized
-            st.rerun()
-        minimized = bool(st.session_state.get("ui_menu_minimized", False))
-
-        if minimized:
-            st.caption(" ")
-        else:
-            st.caption(
-                f"Signed in as `{st.session_state.get('auth_user', '')}` ({current_user_role()})"
-            )
-        st.divider()
-
-        for section_name, rows in page_sections:
-            if not minimized:
-                st.markdown(f"**{section_name}**")
-            for path, lbl, icon in rows:
-                st.page_link(path, label=(" " if minimized else lbl), icon=icon)
-            st.divider()
-
-    minimized = bool(st.session_state.get("ui_menu_minimized", False))
-    if minimized:
-        st.markdown(
-            """
-            <style>
-            [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; width: 53px !important; }
-            section[data-testid="stSidebar"] > div:first-child,
-            div[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
-            [data-testid="stAppViewContainer"] {
-                grid-template-columns: 53px 1fr !important;
-                padding-left: 0 !important;
-                margin-left: 0 !important;
-                width: 100% !important;
-                max-width: 100% !important;
-            }
-            section.main,
-            [data-testid="stMain"],
-            [data-testid="stAppViewContainer"] > .main {
-                margin-left: 0 !important;
-                left: 0 !important;
-                width: 100% !important;
-                max-width: 100% !important;
-                padding-left: 0 !important;
-            }
-            [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
-            [data-testid="stSidebar"] .st-emotion-cache-6qob1r { padding-left: 6px; padding-right: 6px; }
-            [data-testid="stMainBlockContainer"],
-            .main .block-container,
-            section.main > div,
-            section.main > div.block-container {
-                max-width: 100% !important;
-                margin-left: 0 !important;
-                margin-right: 0 !important;
-                padding-left: 1.2rem !important;
-                padding-right: 1.2rem !important;
-                width: 100% !important;
-                min-width: 100% !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            """
-            <style>
-            [data-testid="stSidebar"] { min-width: 280px !important; max-width: 280px !important; }
-            section[data-testid="stSidebar"] > div:first-child { width: 280px !important; }
-            [data-testid="stAppViewContainer"] { grid-template-columns: 280px 1fr !important; }
-            </style>
-            """,
-            unsafe_allow_html=True,
         )
 
     data_mode = str(st.session_state.get("cfg_data_mode", "Repo data (GitHub)"))
