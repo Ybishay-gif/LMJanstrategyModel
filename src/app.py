@@ -20,7 +20,6 @@ st.set_page_config(page_title="Insurance Growth Navigator", layout="wide")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import (
-    ADMIN_EMAIL,
     CONFLICT_PERF_COLOR,
     DARK_CSS,
     DEFAULT_PATHS,
@@ -56,6 +55,8 @@ from auth_layer import (
     resolve_invite_token,
     render_auth_gate,
     render_settings_panel,
+    current_user_is_admin,
+    current_user_role,
     qp_value,
     build_query_url,
     perform_logout,
@@ -1852,7 +1853,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
     init_configuration_state()
 
     user_now = normalize_email(st.session_state.get("auth_user", ""))
-    is_admin = user_now == ADMIN_EMAIL
+    is_admin = current_user_is_admin()
     view = qp_value("view", "main").strip().lower() or "main"
 
     dark_mode = bool(st.session_state.get("cfg_dark_mode", True))
@@ -1871,15 +1872,36 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             border-right: 1px solid rgba(131, 147, 168, 0.22);
             background: linear-gradient(180deg, #060d1b 0%, #050a16 100%);
         }
+        header[data-testid="stHeader"] {
+            left: 0 !important;
+            right: 0 !important;
+            width: 100% !important;
+            margin-left: 0 !important;
+            padding-left: 0 !important;
+        }
         [data-testid="stAppViewContainer"] > .main {
             width: 100% !important;
             max-width: 100% !important;
             margin-left: 0 !important;
+            padding-left: 0 !important;
         }
-        [data-testid="stAppViewContainer"] > .main .block-container {
+        [data-testid="stMain"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin-left: 0 !important;
+        }
+        [data-testid="stAppViewContainer"] > .main .block-container,
+        [data-testid="stMainBlockContainer"],
+        .main .block-container,
+        section.main > div,
+        section.main > div.block-container {
             max-width: 100% !important;
             padding-left: 1.4rem !important;
             padding-right: 1.4rem !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            width: 100% !important;
+            min-width: 100% !important;
         }
         section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
             gap: 0.35rem;
@@ -2014,7 +2036,9 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         if minimized:
             st.caption(" ")
         else:
-            st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
+            st.caption(
+                f"Signed in as `{st.session_state.get('auth_user', '')}` ({current_user_role()})"
+            )
         st.divider()
 
         for section_name, rows in page_sections:
@@ -2029,18 +2053,47 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         st.markdown(
             """
             <style>
-            [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; }
-            section[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
-            section[data-testid="stSidebar"] {
+            [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; width: 53px !important; }
+            section[data-testid="stSidebar"] > div:first-child,
+            div[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
+            section[data-testid="stSidebar"],
+            div[data-testid="stSidebar"] {
                 position: fixed !important;
                 left: 0 !important;
                 top: 0 !important;
                 bottom: 0 !important;
                 z-index: 999 !important;
             }
+            [data-testid="stAppViewContainer"] {
+                grid-template-columns: 0px 1fr !important;
+                padding-left: 0 !important;
+                margin-left: 0 !important;
+                width: 100vw !important;
+                max-width: 100vw !important;
+            }
+            section.main,
+            [data-testid="stMain"],
+            [data-testid="stAppViewContainer"] > .main {
+                margin-left: 0 !important;
+                left: 0 !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                padding-left: 0 !important;
+            }
             [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
             [data-testid="stSidebar"] .st-emotion-cache-6qob1r { padding-left: 6px; padding-right: 6px; }
-            [data-testid="stAppViewContainer"] { padding-left: 0 !important; }
+            [data-testid="stMainBlockContainer"],
+            .main .block-container,
+            section.main > div,
+            section.main > div.block-container {
+                max-width: 100% !important;
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                padding-left: 1.2rem !important;
+                padding-right: 1.2rem !important;
+                width: 100% !important;
+                min-width: 100% !important;
+            }
             </style>
             """,
             unsafe_allow_html=True,
