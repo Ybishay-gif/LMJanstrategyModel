@@ -1,0 +1,13 @@
+{
+  "ybishay@kissterra.com": {
+    "active": true,
+    "email": "ybishay@kissterra.com",
+    "invite_expires_at": "",
+    "invite_token": "",
+    "invited_at": "",
+    "iterations": 240000,
+    "last_login_at": "2026-02-26T13:16:15.622866+00:00",
+    "password_hash": "Fa0y0KKdRDM6FrMokodj/LtdV2v2QVUUOdv1fhxnQrk=",
+    "salt": "m76rSdc6nuaIeehGP9gdsQ=="
+  }
+}
