@@ -310,7 +310,7 @@ def render_auth_gate() -> bool:
         if "invite_token" in st.query_params:
             del st.query_params["invite_token"]
 
-    st.title("🔐 Secure Login")
+    st.title("🔐 Beacon planner")
     if not allowed:
         st.error("No allowlist configured. Add emails to `data/allowed_emails.txt`.")
         return False
