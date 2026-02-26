@@ -17,6 +17,10 @@ except Exception:
     AGGRID_AVAILABLE = False
 
 st.set_page_config(page_title="Insurance Growth Navigator", layout="wide")
+try:
+    st.set_option("client.showSidebarNavigation", False)
+except Exception:
+    pass
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import (
@@ -1893,10 +1897,31 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
     st.markdown(
         """
         <style>
+        [data-testid="stSidebarNav"] {display:none !important;}
+        [data-testid="collapsedControl"] {display:none !important;}
+        [data-testid="stSidebarCollapsedControl"] {display:none !important;}
+        button[aria-label="Open sidebar"] {display:none !important;}
+        button[aria-label="Close sidebar"] {display:none !important;}
         .side-mini-note { color:#93c5fd; font-size:.8rem; opacity:.9; }
         section[data-testid="stSidebar"] {
             border-right: 1px solid rgba(131, 147, 168, 0.22);
-            background: linear-gradient(180deg, #060d1b 0%, #050a16 100%);
+            background: linear-gradient(180deg, #252935 0%, #1c1f29 100%);
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] {
+            border-radius: 10px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .menu-section-label {
+            color: #e5e7eb;
+            opacity: 0.85;
+            font-weight: 700;
+            font-size: 0.95rem;
+            margin-top: 0.25rem;
+            margin-bottom: 0.25rem;
         }
         header[data-testid="stHeader"] {
             left: 0 !important;
@@ -2018,6 +2043,27 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             horizontal=True,
             key="main_view_tab",
         )
+
+    with st.sidebar:
+        st.markdown("<div class='menu-section-label'>Plan</div>", unsafe_allow_html=True)
+        st.page_link("pages/01_Executive_State_View.py", label="Executive State View", icon=":material/flag:")
+        st.page_link("pages/03_State_Momentum_Map.py", label="State Momentum Map", icon=":material/trending_up:")
+        st.divider()
+
+        st.markdown("<div class='menu-section-label'>Price Exploration Details</div>", unsafe_allow_html=True)
+        st.page_link("pages/06_Price_Exploration_Details.py", label="Price Exploration Details", icon=":material/price_change:")
+        st.divider()
+
+        st.markdown("<div class='menu-section-label'>Explore</div>", unsafe_allow_html=True)
+        st.page_link("pages/04_Channel_Group_Analysis.py", label="Channel Group Analysis", icon=":material/leaderboard:")
+        st.page_link("pages/05_Channel_Group_and_States.py", label="Channel Group and State", icon=":material/hub:")
+        st.page_link("pages/07_General_Analytics.py", label="Analytics", icon=":material/insights:")
+        st.divider()
+
+        st.markdown("<div class='menu-section-label'>Settings</div>", unsafe_allow_html=True)
+        st.page_link("pages/02_Plan_Settings.py", label="Plan Settings", icon=":material/tune:")
+        st.page_link("pages/10_User_Management.py", label="User Management", icon=":material/groups:")
+        st.page_link("pages/09_Configuration.py", label="Configuration", icon=":material/settings:")
 
     data_mode = str(st.session_state.get("cfg_data_mode", "Repo data (GitHub)"))
     strategy_upload = st.session_state.get("cfg_strategy_upload")

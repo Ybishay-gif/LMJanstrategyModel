@@ -21,6 +21,11 @@ from storage_layer import (
     load_allowed_emails_store,
     save_allowed_emails_store,
     persistence_backend_name,
+    get_allowed_email_role,
+    get_allowed_email_records,
+    upsert_allowed_email_record,
+    set_allowed_email_active,
+    append_audit_log,
 )
 
 
@@ -32,6 +37,66 @@ def _is_cloud_runtime() -> bool:
 
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
+
+
+def normalize_role(role: str) -> str:
+    r = str(role or "").strip().upper()
+    return r if r in {"ADMIN", "EDITOR", "VIEWER"} else "VIEWER"
+
+
+def _auth_mode() -> str:
+    raw = str(os.getenv("APP_AUTH_MODE", "password") or "password").strip().lower()
+    return raw if raw in {"password", "hybrid", "google_oidc"} else "password"
+
+
+def _oidc_supported() -> bool:
+    return all(hasattr(st, n) for n in ("login", "logout", "user"))
+
+
+def _oidc_identity() -> tuple[str, bool]:
+    try:
+        user = getattr(st, "user", None)
+        if user is None:
+            return "", False
+        logged_in = bool(getattr(user, "is_logged_in", False))
+        email = normalize_email(getattr(user, "email", "")) if logged_in else ""
+        return email, logged_in
+    except Exception:
+        return "", False
+
+
+def resolve_user_role(email: str) -> str:
+    e = normalize_email(email)
+    role = normalize_role(get_allowed_email_role(e))
+    if e == normalize_email(ADMIN_EMAIL):
+        return "ADMIN"
+    return role or "VIEWER"
+
+
+def current_user_role() -> str:
+    raw = str(st.session_state.get("auth_role", "")).strip().upper()
+    if raw in {"ADMIN", "EDITOR", "VIEWER"}:
+        return raw
+    email = normalize_email(st.session_state.get("auth_user", ""))
+    if not email:
+        return "VIEWER"
+    role = resolve_user_role(email)
+    st.session_state["auth_role"] = role
+    return role
+
+
+def current_user_is_admin() -> bool:
+    return current_user_role() == "ADMIN"
+
+
+def _set_authenticated_session(email: str) -> None:
+    e = normalize_email(email)
+    st.session_state["auth_ok"] = True
+    st.session_state["auth_user"] = e
+    st.session_state["auth_email"] = e
+    st.session_state["auth_stage"] = "password"
+    st.session_state["auth_role"] = resolve_user_role(e)
+    append_audit_log(e, "LOGIN_SUCCESS", target="auth_gate")
 
 
 def load_allowed_emails() -> set[str]:
@@ -148,8 +213,8 @@ def _request_fingerprint(headers: Optional[dict] = None) -> str:
         h = {}
     ua = str(h.get("user-agent", "")).strip().lower()
     al = str(h.get("accept-language", "")).strip().lower()
-    xff = str(h.get("x-forwarded-for", "")).split(",")[0].strip().lower()
-    raw = f"{ua}|{al}|{xff}"
+    # Do not bind auth sessions to forwarded IP; proxies/NAT can rotate it frequently.
+    raw = f"{ua}|{al}"
     if not raw.replace("|", ""):
         return ""
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -298,6 +363,37 @@ def render_auth_gate() -> bool:
 
     allowed = load_allowed_emails()
     users = load_auth_users()
+    mode = _auth_mode()
+
+    if mode in {"hybrid", "google_oidc"}:
+        st.title("🔐 Beacon planner")
+        if not allowed:
+            st.error("No allowlist configured. Add allowed emails first.")
+            return False
+        if not _oidc_supported():
+            if mode == "google_oidc":
+                st.error("Google OIDC mode is enabled but Streamlit OIDC APIs are unavailable.")
+                return False
+            st.warning("Google OIDC is unavailable in this runtime; using password fallback.")
+        else:
+            oidc_email, oidc_logged_in = _oidc_identity()
+            if oidc_logged_in and oidc_email in allowed:
+                _set_authenticated_session(oidc_email)
+                return True
+            if mode == "google_oidc":
+                st.caption("Google OIDC mode is enabled.")
+                if oidc_logged_in and oidc_email not in allowed:
+                    st.error(f"Email is not authorized: {oidc_email}")
+                c1, c2 = st.columns(2)
+                if c1.button("Continue with Google", use_container_width=True):
+                    st.login()
+                if oidc_logged_in and c2.button("Sign out Google", use_container_width=True):
+                    st.logout()
+                return False
+            st.info("Google sign-in is available. You can also use password login below.")
+            if st.button("Continue with Google"):
+                st.login()
+
     qp_session = st.query_params.get("session_token")
     if isinstance(qp_session, list):
         qp_session = qp_session[0] if qp_session else ""
@@ -306,10 +402,7 @@ def render_auth_gate() -> bool:
         # Drop stale/invalid/shared token so user sees login instead of silent bypass attempts.
         del st.query_params["session_token"]
     if remembered_email:
-        st.session_state["auth_ok"] = True
-        st.session_state["auth_user"] = remembered_email
-        st.session_state["auth_email"] = remembered_email
-        st.session_state["auth_stage"] = "password"
+        _set_authenticated_session(remembered_email)
         return True
 
     qp_token = st.query_params.get("invite_token")
@@ -333,10 +426,10 @@ def render_auth_gate() -> bool:
 
     st.title("🔐 Beacon planner")
     backend = persistence_backend_name()
-    if backend != "github":
-        st.warning("Auth storage backend is `local` (ephemeral on redeploy). Configure GitHub persistence secrets.")
+    if backend == "local":
+        st.warning("Auth storage backend is `local` (ephemeral on redeploy). Configure Postgres or GitHub persistence.")
     else:
-        st.caption("Auth storage backend: `github`")
+        st.caption(f"Auth storage backend: `{backend}`")
     if not allowed:
         st.error("No allowlist configured. Add emails to `data/allowed_emails.txt`.")
         return False
@@ -417,9 +510,7 @@ def render_auth_gate() -> bool:
             st.query_params["session_token"] = make_stateless_session_token(
                 staged_email, _request_fingerprint()
             )
-            st.session_state["auth_ok"] = True
-            st.session_state["auth_user"] = staged_email
-            st.session_state["auth_stage"] = "password"
+            _set_authenticated_session(staged_email)
             if "invite_token" in st.query_params:
                 del st.query_params["invite_token"]
             st.rerun()
@@ -464,8 +555,7 @@ def render_auth_gate() -> bool:
             st.query_params["session_token"] = make_stateless_session_token(
                 staged_email, _request_fingerprint()
             )
-            st.session_state["auth_ok"] = True
-            st.session_state["auth_user"] = staged_email
+            _set_authenticated_session(staged_email)
             st.rerun()
         return False
 
@@ -475,12 +565,15 @@ def render_auth_gate() -> bool:
 
 def render_settings_panel() -> None:
     current_user = normalize_email(st.session_state.get("auth_user", ""))
-    if current_user != ADMIN_EMAIL:
+    if not current_user_is_admin():
         st.error("Settings is available for admin only.")
         return
 
     users = load_auth_users()
     allowed = load_allowed_emails()
+    role_records = get_allowed_email_records()
+    role_map = {normalize_email(r.get("email", "")): normalize_role(r.get("role", "VIEWER")) for r in role_records}
+    backend = persistence_backend_name()
 
     st.subheader("⚙️ Access Settings")
     rows = []
@@ -492,25 +585,42 @@ def render_settings_panel() -> None:
                 "Email": e,
                 "Has Password": bool(rec.get("password_hash")),
                 "Access": "Active" if bool(rec.get("active", True)) else "Revoked",
+                "Role": role_map.get(e, "ADMIN" if e == normalize_email(ADMIN_EMAIL) else "VIEWER"),
                 "Last Login": rec.get("last_login_at", ""),
                 "Invited At": rec.get("invited_at", ""),
             }
         )
-    users_df = pd.DataFrame(rows).sort_values("Email") if rows else pd.DataFrame(columns=["Email", "Has Password", "Access", "Last Login", "Invited At"])
+    users_df = pd.DataFrame(rows).sort_values("Email") if rows else pd.DataFrame(columns=["Email", "Has Password", "Access", "Role", "Last Login", "Invited At"])
     render_formatted_table(users_df, use_container_width=True)
 
     st.markdown("**Manage Existing User**")
     if not users_df.empty:
-        c1, c2, c3 = st.columns([2, 1, 1])
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         picked = c1.selectbox("User", options=users_df["Email"].tolist(), key="settings_user_pick")
-        do_revoke = c2.button("Revoke Access", key="settings_revoke")
-        do_restore = c3.button("Restore Access", key="settings_restore")
+        role_options = ["VIEWER", "EDITOR", "ADMIN"]
+        picked_role = role_map.get(picked, "VIEWER")
+        if picked_role not in role_options:
+            picked_role = "VIEWER"
+        selected_role = c2.selectbox(
+            "Role",
+            options=role_options,
+            index=role_options.index(picked_role),
+            key="settings_role_pick",
+            disabled=(backend != "postgres"),
+        )
+        do_revoke = c3.button("Revoke Access", key="settings_revoke")
+        do_restore = c4.button("Restore Access", key="settings_restore")
+        do_save_role = st.button("Save Role", key="settings_save_role", disabled=(backend != "postgres"))
+        if backend != "postgres":
+            st.caption("Role management is enabled when backend is `postgres`.")
         if do_revoke and picked:
             rec = users.get(picked, {}) if isinstance(users.get(picked), dict) else {}
             rec["email"] = picked
             rec["active"] = False
             users[picked] = rec
             ok, err = save_auth_users(users)
+            set_allowed_email_active(picked, False)
+            append_audit_log(current_user, "REVOKE_ACCESS", target=picked)
             if ok:
                 st.success(f"Revoked access: {picked}")
                 st.rerun()
@@ -524,15 +634,32 @@ def render_settings_panel() -> None:
             allowed.add(picked)
             ok1, err1 = save_auth_users(users)
             ok2, err2 = save_allowed_emails(allowed)
+            set_allowed_email_active(picked, True)
+            append_audit_log(current_user, "RESTORE_ACCESS", target=picked)
             if ok1 and ok2:
                 st.success(f"Restored access: {picked}")
                 st.rerun()
             else:
                 st.error(err1 or err2)
+        if do_save_role and picked:
+            ok_role, err_role = upsert_allowed_email_record(picked, role=selected_role, is_active=(picked in allowed))
+            if ok_role:
+                append_audit_log(current_user, "UPDATE_ROLE", target=picked, metadata={"role": selected_role})
+                st.success(f"Updated role for {picked} -> {selected_role}")
+                st.rerun()
+            else:
+                st.error(err_role)
 
     st.markdown("**Invite New User**")
     with st.form("invite_form", clear_on_submit=False):
         new_email = st.text_input("Email to invite", placeholder="name@company.com")
+        invite_role = st.selectbox(
+            "Role",
+            options=["VIEWER", "EDITOR", "ADMIN"],
+            index=0,
+            disabled=(backend != "postgres"),
+            help="Role is persisted when Postgres backend is enabled.",
+        )
         send_btn = st.form_submit_button("Invite")
     if send_btn:
         e = normalize_email(new_email)
@@ -550,6 +677,9 @@ def render_settings_panel() -> None:
             users[e] = rec
             ok1, err1 = save_allowed_emails(allowed)
             ok2, err2 = save_auth_users(users)
+            if backend == "postgres":
+                upsert_allowed_email_record(e, role=invite_role, is_active=True)
+            append_audit_log(current_user, "INVITE_USER", target=e, metadata={"role": invite_role})
             if not (ok1 and ok2):
                 st.error(err1 or err2)
             else:
@@ -589,6 +719,12 @@ def build_query_url(updates: dict[str, Optional[str]]) -> str:
 
 
 def perform_logout() -> None:
+    if _auth_mode() in {"hybrid", "google_oidc"} and _oidc_supported():
+        _, oidc_logged_in = _oidc_identity()
+        if oidc_logged_in:
+            st.logout()
+            return
+
     u = normalize_email(st.session_state.get("auth_user", ""))
     users = load_auth_users()
     rec = users.get(u, {}) if isinstance(users.get(u), dict) else {}
@@ -600,6 +736,7 @@ def perform_logout() -> None:
     st.session_state["auth_user"] = ""
     st.session_state["auth_stage"] = "email"
     st.session_state["auth_email"] = ""
+    st.session_state["auth_role"] = "VIEWER"
     st.session_state["show_settings"] = False
     for k in ("session_token", "view", "action"):
         if k in st.query_params:
