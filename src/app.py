@@ -37,31 +37,62 @@ from config import (
     mode_factor,
 )
 from ui_utils import styled_table, _safe_weighted_mean, format_display_df, render_formatted_table
-from auth_layer import (
-    normalize_email,
-    load_allowed_emails,
-    save_allowed_emails,
-    now_iso,
-    load_auth_users,
-    save_auth_users,
-    hash_password,
-    verify_password,
-    make_invite_token,
-    make_session_token,
-    build_invite_link,
-    issue_session,
-    resolve_session_token,
-    send_invite_email,
-    resolve_invite_token,
-    render_auth_gate,
-    render_settings_panel,
-    current_user_is_admin,
-    current_user_role,
-    qp_value,
-    build_query_url,
-    perform_logout,
-    render_top_icons,
-)
+try:
+    from auth_layer import (
+        normalize_email,
+        load_allowed_emails,
+        save_allowed_emails,
+        now_iso,
+        load_auth_users,
+        save_auth_users,
+        hash_password,
+        verify_password,
+        make_invite_token,
+        make_session_token,
+        build_invite_link,
+        issue_session,
+        resolve_session_token,
+        send_invite_email,
+        resolve_invite_token,
+        render_auth_gate,
+        render_settings_panel,
+        current_user_is_admin,
+        current_user_role,
+        qp_value,
+        build_query_url,
+        perform_logout,
+        render_top_icons,
+    )
+except ImportError:
+    from auth_layer import (
+        normalize_email,
+        load_allowed_emails,
+        save_allowed_emails,
+        now_iso,
+        load_auth_users,
+        save_auth_users,
+        hash_password,
+        verify_password,
+        make_invite_token,
+        make_session_token,
+        build_invite_link,
+        issue_session,
+        resolve_session_token,
+        send_invite_email,
+        resolve_invite_token,
+        render_auth_gate,
+        render_settings_panel,
+        qp_value,
+        build_query_url,
+        perform_logout,
+        render_top_icons,
+    )
+
+    def current_user_role() -> str:
+        return "VIEWER"
+
+    def current_user_is_admin() -> bool:
+        return False
 from data_io import read_csv, read_state_strategy, parse_state_strategy_text, apply_strategy_overrides, file_mtime
 from core_helpers import (
     to_numeric,
