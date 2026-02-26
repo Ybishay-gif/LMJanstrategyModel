@@ -23,6 +23,13 @@ from storage_layer import (
     persistence_backend_name,
 )
 
+
+def _is_cloud_runtime() -> bool:
+    # Streamlit Cloud commonly runs under /mount/src with HOME=/home/adminuser
+    home = str(os.getenv("HOME", "")).lower()
+    cwd = str(os.getcwd()).lower()
+    return ("/home/adminuser" in home) or ("/mount/src" in cwd) or bool(os.getenv("STREAMLIT_CLOUD", ""))
+
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
 
@@ -363,6 +370,12 @@ def render_auth_gate() -> bool:
 
     if stage == "create":
         st.info(f"First-time setup for: `{staged_email}`")
+        if _is_cloud_runtime() and backend != "github":
+            st.error(
+                "Cannot create password in non-persistent mode on Cloud. "
+                "Set `PERSIST_GITHUB_TOKEN` and `PERSIST_GITHUB_REPO` in Streamlit secrets first."
+            )
+            return False
         with st.form("auth_create_form", clear_on_submit=False):
             p1 = st.text_input("Create password", type="password")
             p2 = st.text_input("Confirm password", type="password")
