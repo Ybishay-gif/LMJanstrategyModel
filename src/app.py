@@ -1770,6 +1770,7 @@ VIEW_TO_LABEL = {
     "tab5": "📚 Tab 5: General Analytics",
     "config": "🛠️ Configuration",
     "user_mgmt": "👥 User Management",
+    "logout": "🚪 Logout",
     "neon": "🌌 Neon Insights Cockpit",
 }
 
@@ -1861,6 +1862,8 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         """
         <style>
         [data-testid="stSidebarNav"] {display:none;}
+        [data-testid="collapsedControl"] {display:none !important;}
+        [data-testid="stSidebarCollapsedControl"] {display:none !important;}
         .side-mini-note { color:#93c5fd; font-size:.8rem; opacity:.9; }
         section[data-testid="stSidebar"] {
             border-right: 1px solid rgba(131, 147, 168, 0.22);
@@ -1967,13 +1970,13 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
                 ("pages/04_Channel_Group_Analysis.py", "Channel Analysis", "📊"),
                 ("pages/05_Channel_Group_and_States.py", "Channel + State", "🧠"),
                 ("pages/06_Price_Exploration_Details.py", "Price Exploration", "🧪"),
+                ("pages/07_General_Analytics.py", "General Analytics", "📚"),
                 ("pages/08_Neon_Insights_Cockpit.py", "Neon Insights", "🌌"),
             ],
         ),
         (
             "Manage",
             [
-                ("pages/07_General_Analytics.py", "General Analytics", "📚"),
                 ("pages/02_Plan_Settings.py", "Plan Settings", "⚙️"),
                 ("pages/09_Configuration.py", "Configuration", "🛠️"),
             ],
@@ -1982,18 +1985,18 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             "System",
             [
                 ("pages/10_User_Management.py", "User Management", "👥"),
+                ("pages/11_Logout.py", "Logout", "🚪"),
             ],
         ),
     ]
 
     with st.sidebar:
         minimized = bool(st.session_state.get("ui_menu_minimized", False))
-        c_toggle, c_pin = st.columns([1, 1])
+        c_toggle = st.columns([1])[0]
         arrow = "❯" if minimized else "❮"
         if c_toggle.button(arrow, key="menu_min_toggle", help="Collapse/Expand menu", use_container_width=True):
             st.session_state["ui_menu_minimized"] = not minimized
             st.rerun()
-        c_pin.toggle("📌", key="ui_menu_pinned")
         minimized = bool(st.session_state.get("ui_menu_minimized", False))
 
         if minimized:
@@ -2009,10 +2012,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
                 st.page_link(path, label=(" " if minimized else lbl), icon=icon)
             st.divider()
 
-        if st.button(("🚪" if minimized else "🚪 Logout"), use_container_width=True, key="sidebar_logout_btn"):
-            perform_logout()
-            return
-
     minimized = bool(st.session_state.get("ui_menu_minimized", False))
     if minimized:
         st.markdown(
@@ -2021,6 +2020,8 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             [data-testid="stSidebar"] { min-width: 53px !important; max-width: 53px !important; }
             section[data-testid="stSidebar"] > div:first-child { width: 53px !important; }
             [data-testid="stSidebar"] .stMarkdown p { font-size: 0.01px; }
+            [data-testid="stSidebar"] .st-emotion-cache-6qob1r { padding-left: 6px; padding-right: 6px; }
+            [data-testid="stAppViewContainer"] > .main { margin-left: 53px !important; }
             </style>
             """,
             unsafe_allow_html=True,
@@ -2031,6 +2032,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             <style>
             [data-testid="stSidebar"] { min-width: 280px !important; max-width: 280px !important; }
             section[data-testid="stSidebar"] > div:first-child { width: 280px !important; }
+            [data-testid="stAppViewContainer"] > .main { margin-left: 280px !important; }
             </style>
             """,
             unsafe_allow_html=True,
@@ -2055,6 +2057,10 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
     # Auto-run on first load; Refresh is optional for manual reruns.
     _ = run
     strategy_profiles = normalize_strategy_profiles(load_strategy_profiles())
+
+    if selected_tab == VIEW_TO_LABEL["logout"]:
+        perform_logout()
+        return
 
     if selected_tab == VIEW_TO_LABEL["user_mgmt"]:
         st.title("User Management")
