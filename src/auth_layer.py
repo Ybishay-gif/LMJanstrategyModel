@@ -15,6 +15,7 @@ import streamlit as st
 
 from config import AUTH_USERS_PATH, AUTH_ALLOWLIST_PATH, ADMIN_EMAIL, SESSION_TTL_DAYS
 from ui_utils import render_formatted_table
+from storage_layer import load_auth_users_store, save_auth_users_store
 
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
@@ -55,23 +56,26 @@ def now_iso() -> str:
 
 def load_auth_users() -> dict:
     try:
-        if not AUTH_USERS_PATH.exists():
-            return {}
-        data = json.loads(AUTH_USERS_PATH.read_text())
+        data = load_auth_users_store()
         if isinstance(data, dict):
             return data
     except Exception:
-        return {}
+        pass
+    try:
+        if AUTH_USERS_PATH.exists():
+            data = json.loads(AUTH_USERS_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
     return {}
 
 
 def save_auth_users(users: dict) -> tuple[bool, str]:
-    try:
-        AUTH_USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        AUTH_USERS_PATH.write_text(json.dumps(users, indent=2))
+    ok, err = save_auth_users_store(users if isinstance(users, dict) else {})
+    if ok:
         return True, ""
-    except Exception as exc:
-        return False, f"Failed to save user credentials: {exc}"
+    return False, err or "Failed to save user credentials."
 
 
 def hash_password(password: str) -> tuple[str, str, int]:

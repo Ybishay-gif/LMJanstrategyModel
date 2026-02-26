@@ -1768,32 +1768,104 @@ VIEW_TO_LABEL = {
     "tab3": "🧠 Tab 3: Channel Group and States",
     "tab4": "🧪 Tab 4: Price Exploration Details",
     "tab5": "📚 Tab 5: General Analytics",
+    "config": "🛠️ Configuration",
+    "user_mgmt": "👥 User Management",
     "neon": "🌌 Neon Insights Cockpit",
 }
+
+
+CFG_DEFAULTS: dict[str, object] = {
+    "cfg_dark_mode": True,
+    "cfg_fast_mode": True,
+    "cfg_data_mode": "Repo data (GitHub)",
+    "cfg_strategy_path": DEFAULT_PATHS["state_strategy"],
+    "cfg_state_path": DEFAULT_PATHS["state_data"],
+    "cfg_state_seg_path": DEFAULT_PATHS["state_seg"],
+    "cfg_channel_group_path": DEFAULT_PATHS["channel_group"],
+    "cfg_price_path": DEFAULT_PATHS["channel_price_exp"],
+    "cfg_channel_state_path": DEFAULT_PATHS["channel_state"],
+    "cfg_optimization_mode": "Max Growth",
+    "cfg_max_cpc_increase_pct": 45,
+    "cfg_growth_weight": 0.70,
+    "cfg_profit_weight": 0.30,
+    "cfg_min_bids_channel_state": 5,
+    "cfg_cpc_penalty_weight": 0.65,
+    "cfg_min_intent_for_scale": 0.65,
+    "cfg_roe_pullback_floor": -0.45,
+    "cfg_cr_pullback_ceiling": 1.35,
+    "cfg_max_perf_drop": 0.15,
+    "cfg_min_new_performance": 0.80,
+    "cfg_min_clicks_intent_sig": 80,
+    "cfg_min_bids_price_sig": 75,
+    "cfg_min_clicks_price_sig": 30,
+    "cfg_min_binds_perf_sig": 8,
+    "cfg_aggressive_cutoff": 0.40,
+    "cfg_controlled_cutoff": 0.25,
+    "cfg_maintain_cutoff": 0.10,
+    "cfg_max_adj_strongest": 45,
+    "cfg_max_adj_moderate": 35,
+    "cfg_max_adj_minimal": 25,
+    "cfg_max_adj_constrained": 15,
+    "ui_menu_minimized": False,
+    "ui_menu_pinned": True,
+}
+
+
+def init_configuration_state() -> None:
+    for k, v in CFG_DEFAULTS.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def current_settings_from_session() -> Settings:
+    return Settings(
+        max_cpc_increase_pct=int(st.session_state.get("cfg_max_cpc_increase_pct", 45)),
+        min_bids_channel_state=int(st.session_state.get("cfg_min_bids_channel_state", 5)),
+        cpc_penalty_weight=float(st.session_state.get("cfg_cpc_penalty_weight", 0.65)),
+        growth_weight=float(st.session_state.get("cfg_growth_weight", 0.70)),
+        profit_weight=float(st.session_state.get("cfg_profit_weight", 0.30)),
+        aggressive_cutoff=float(st.session_state.get("cfg_aggressive_cutoff", 0.40)),
+        controlled_cutoff=float(st.session_state.get("cfg_controlled_cutoff", 0.25)),
+        maintain_cutoff=float(st.session_state.get("cfg_maintain_cutoff", 0.10)),
+        min_intent_for_scale=float(st.session_state.get("cfg_min_intent_for_scale", 0.65)),
+        roe_pullback_floor=float(st.session_state.get("cfg_roe_pullback_floor", -0.45)),
+        cr_pullback_ceiling=float(st.session_state.get("cfg_cr_pullback_ceiling", 1.35)),
+        max_adj_strongest=float(st.session_state.get("cfg_max_adj_strongest", 45)),
+        max_adj_moderate=float(st.session_state.get("cfg_max_adj_moderate", 35)),
+        max_adj_minimal=float(st.session_state.get("cfg_max_adj_minimal", 25)),
+        max_adj_constrained=float(st.session_state.get("cfg_max_adj_constrained", 15)),
+        min_clicks_intent_sig=int(st.session_state.get("cfg_min_clicks_intent_sig", 80)),
+        min_bids_price_sig=int(st.session_state.get("cfg_min_bids_price_sig", 75)),
+        min_clicks_price_sig=int(st.session_state.get("cfg_min_clicks_price_sig", 30)),
+        min_binds_perf_sig=int(st.session_state.get("cfg_min_binds_perf_sig", 8)),
+        optimization_mode=str(st.session_state.get("cfg_optimization_mode", "Max Growth")),
+        max_perf_drop=float(st.session_state.get("cfg_max_perf_drop", 0.15)),
+        min_new_performance=float(st.session_state.get("cfg_min_new_performance", 0.80)),
+    )
 
 
 def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> None:
     if not render_auth_gate():
         return
 
-    action = qp_value("action", "")
-    if action == "logout":
-        perform_logout()
-        return
-
-    if "global_optimization_mode" not in st.session_state:
-        st.session_state["global_optimization_mode"] = "Max Growth"
+    init_configuration_state()
 
     user_now = normalize_email(st.session_state.get("auth_user", ""))
     is_admin = user_now == ADMIN_EMAIL
     view = qp_value("view", "main").strip().lower() or "main"
 
-    with st.sidebar:
-        st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
-        st.divider()
-        dark_mode = st.toggle("Dark mode", value=True)
-        fast_mode = st.toggle("Fast interaction mode", value=True, help="Reduces heavy chart rendering for faster clicks/saves.")
+    dark_mode = bool(st.session_state.get("cfg_dark_mode", True))
+    fast_mode = bool(st.session_state.get("cfg_fast_mode", True))
     st.markdown(DARK_CSS if dark_mode else LIGHT_CSS, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebarNav"] {display:none;}
+        .side-mini-note { color:#93c5fd; font-size:.8rem; opacity:.9; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown(
         """
         <style>
@@ -1831,12 +1903,6 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
 
     plotly_template = "plotly_dark" if dark_mode else "plotly_white"
 
-    render_top_icons(is_admin=is_admin, settings_view=(view == "settings"))
-    if view == "settings":
-        st.title("Settings")
-        render_settings_panel()
-        return
-
     st.title("Insurance Growth Navigator")
     st.markdown(
         """
@@ -1863,112 +1929,126 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             horizontal=True,
             key="main_view_tab",
         )
+    if not bool(st.session_state.get("ui_menu_pinned", True)):
+        st.session_state["ui_menu_minimized"] = True
+
+    page_links = [
+        ("pages/01_Executive_State_View.py", VIEW_TO_LABEL["tab0"], "🏁"),
+        ("pages/02_Plan_Settings.py", VIEW_TO_LABEL["settings"], "⚙️"),
+        ("pages/03_State_Momentum_Map.py", VIEW_TO_LABEL["tab1"], "🗺️"),
+        ("pages/04_Channel_Group_Analysis.py", VIEW_TO_LABEL["tab2"], "📊"),
+        ("pages/05_Channel_Group_and_States.py", VIEW_TO_LABEL["tab3"], "🧠"),
+        ("pages/06_Price_Exploration_Details.py", VIEW_TO_LABEL["tab4"], "🧪"),
+        ("pages/07_General_Analytics.py", VIEW_TO_LABEL["tab5"], "📚"),
+        ("pages/08_Neon_Insights_Cockpit.py", VIEW_TO_LABEL["neon"], "🌌"),
+        ("pages/09_Configuration.py", VIEW_TO_LABEL["config"], "🛠️"),
+        ("pages/10_User_Management.py", VIEW_TO_LABEL["user_mgmt"], "👥"),
+    ]
 
     with st.sidebar:
-        st.header("Data Paths")
-        data_mode = st.radio(
-            "Data source mode",
-            options=["Repo data (GitHub)", "Upload files (Cloud)", "Local paths (Desktop)"],
-            index=0,
-        )
+        st.caption(f"Signed in as `{st.session_state.get('auth_user', '')}`")
+        cmin, cpin = st.columns(2)
+        cmin.toggle("Minimize", key="ui_menu_minimized")
+        cpin.toggle("Pin", key="ui_menu_pinned")
+        minimized = bool(st.session_state.get("ui_menu_minimized", False))
+        st.divider()
+        for path, lbl, icon in page_links:
+            st.page_link(path, label=(icon if minimized else f"{icon} {lbl}"))
+        st.divider()
+        if st.button("🚪 Logout", use_container_width=True, key="sidebar_logout_btn"):
+            perform_logout()
+            return
+        if minimized:
+            st.caption("Menu in icon-only mode")
 
-        strategy_upload = state_upload = state_seg_upload = None
-        channel_group_upload = price_upload = channel_state_upload = None
-        strategy_path = state_path = state_seg_path = ""
-        channel_group_path = price_path = channel_state_path = ""
-
-        if data_mode == "Repo data (GitHub)":
-            st.caption("Using data files from repository `data/` folder.")
-        elif data_mode == "Upload files (Cloud)":
-            strategy_upload = st.file_uploader("State strategy file", type=None)
-            state_upload = st.file_uploader("State data CSV", type=["csv"])
-            state_seg_upload = st.file_uploader("State-segment CSV", type=["csv"])
-            channel_group_upload = st.file_uploader("Channel group CSV", type=["csv"])
-            price_upload = st.file_uploader("Price exploration CSV", type=["csv"])
-            channel_state_upload = st.file_uploader("Channel group x state CSV", type=["csv"])
-        else:
-            strategy_path = st.text_input("State strategy", value=DEFAULT_PATHS["state_strategy"])
-            state_path = st.text_input("State data", value=DEFAULT_PATHS["state_data"])
-            state_seg_path = st.text_input("State-segment data", value=DEFAULT_PATHS["state_seg"])
-            channel_group_path = st.text_input("Channel group data", value=DEFAULT_PATHS["channel_group"])
-            price_path = st.text_input("Price exploration data", value=DEFAULT_PATHS["channel_price_exp"])
-            channel_state_path = st.text_input("Channel group x state data", value=DEFAULT_PATHS["channel_state"])
-
-        st.header("Model Controls")
-        st.caption("Binds Growth Mode: calibrated to scale high-intent growth lanes and reduce fewer bids.")
-        optimization_mode = st.select_slider(
-            "Recommendation Strategy",
-            options=OPTIMIZATION_MODES,
-            value=st.session_state.get("global_optimization_mode", "Max Growth"),
-            key="global_optimization_mode",
-        )
-        st.caption(f"Mode active: `{optimization_mode}`")
-        
-        st.markdown("**Guardrails**")
-        max_cpc_increase_pct = st.slider("Max CPC increase %", 0, 45, 45, 1)
-
-        st.markdown("**Scoring Weights**")
-        growth_weight = st.slider("Growth weight", 0.0, 1.0, 0.70, 0.05)
-        profit_weight = st.slider("Profitability weight", 0.0, 1.0, 0.30, 0.05)
-
-        min_bids_channel_state = st.slider("Min bids for reliable channel-state", 1, 20, 5, 1)
-        cpc_penalty_weight = st.slider("CPC penalty", 0.0, 1.5, 0.65, 0.05)
-        min_intent_for_scale = st.slider("Min intent to allow positive scaling", 0.0, 1.0, 0.65, 0.01)
-        roe_pullback_floor = st.slider("ROE severe pullback floor", -1.0, 0.5, -0.45, 0.01)
-        cr_pullback_ceiling = st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, 1.35, 0.01)
-        max_perf_drop = st.slider("Max performance drop vs current", 0.00, 0.60, 0.15, 0.01)
-        min_new_performance = st.slider("Minimum new performance", 0.20, 1.50, 0.80, 0.01)
-
-        st.markdown("**Stat Sig Rules**")
-        min_clicks_intent_sig = st.slider("Min clicks for intent significance", 10, 300, 80, 5)
-        min_bids_price_sig = st.slider("Min bids for price-test significance", 10, 500, 75, 5)
-        min_clicks_price_sig = st.slider("Min clicks for price-test significance", 5, 200, 30, 5)
-        min_binds_perf_sig = st.slider("Min binds for state performance significance", 5, 10, 8, 1)
-
-        st.markdown("**Score Cutoffs**")
-        aggressive_cutoff = st.slider("Aggressive cutoff", 0.3, 1.0, 0.40, 0.01)
-        controlled_cutoff = st.slider("Controlled cutoff", 0.2, aggressive_cutoff, min(0.25, aggressive_cutoff), 0.01)
-        maintain_cutoff = st.slider("Maintain cutoff", 0.0, controlled_cutoff, min(0.10, controlled_cutoff), 0.01)
-
-        st.markdown("**Strategy Max Adjustment (%)**")
-        max_adj_strongest = st.slider("Strongest Momentum cap", -10, 60, 45, 1)
-        max_adj_moderate = st.slider("Moderate Momentum cap", -10, 50, 35, 1)
-        max_adj_minimal = st.slider("Minimal Growth cap", -10, 40, 25, 1)
-        max_adj_constrained = st.slider("Constrained / Inactive cap", -10, 30, 15, 1)
-
-        settings = Settings(
-            max_cpc_increase_pct=max_cpc_increase_pct,
-            min_bids_channel_state=min_bids_channel_state,
-            cpc_penalty_weight=cpc_penalty_weight,
-            growth_weight=growth_weight,
-            profit_weight=profit_weight,
-            aggressive_cutoff=aggressive_cutoff,
-            controlled_cutoff=controlled_cutoff,
-            maintain_cutoff=maintain_cutoff,
-            min_intent_for_scale=min_intent_for_scale,
-            roe_pullback_floor=roe_pullback_floor,
-            cr_pullback_ceiling=cr_pullback_ceiling,
-            max_adj_strongest=max_adj_strongest,
-            max_adj_moderate=max_adj_moderate,
-            max_adj_minimal=max_adj_minimal,
-            max_adj_constrained=max_adj_constrained,
-            min_clicks_intent_sig=min_clicks_intent_sig,
-            min_bids_price_sig=min_bids_price_sig,
-            min_clicks_price_sig=min_clicks_price_sig,
-            min_binds_perf_sig=min_binds_perf_sig,
-            optimization_mode=optimization_mode,
-            max_perf_drop=max_perf_drop,
-            min_new_performance=min_new_performance,
-        )
-        st.caption(
-            f"Effective CPC cap: {effective_cpc_cap_pct(settings):.0f}% | "
-            f"Effective CPC penalty: {effective_cpc_penalty(settings):.2f}"
-        )
-        run = st.button("Refresh", type="primary")
+    data_mode = str(st.session_state.get("cfg_data_mode", "Repo data (GitHub)"))
+    strategy_upload = st.session_state.get("cfg_strategy_upload")
+    state_upload = st.session_state.get("cfg_state_upload")
+    state_seg_upload = st.session_state.get("cfg_state_seg_upload")
+    channel_group_upload = st.session_state.get("cfg_channel_group_upload")
+    price_upload = st.session_state.get("cfg_price_upload")
+    channel_state_upload = st.session_state.get("cfg_channel_state_upload")
+    strategy_path = str(st.session_state.get("cfg_strategy_path", DEFAULT_PATHS["state_strategy"]))
+    state_path = str(st.session_state.get("cfg_state_path", DEFAULT_PATHS["state_data"]))
+    state_seg_path = str(st.session_state.get("cfg_state_seg_path", DEFAULT_PATHS["state_seg"]))
+    channel_group_path = str(st.session_state.get("cfg_channel_group_path", DEFAULT_PATHS["channel_group"]))
+    price_path = str(st.session_state.get("cfg_price_path", DEFAULT_PATHS["channel_price_exp"]))
+    channel_state_path = str(st.session_state.get("cfg_channel_state_path", DEFAULT_PATHS["channel_state"]))
+    settings = current_settings_from_session()
+    run = True
 
     # Auto-run on first load; Refresh is optional for manual reruns.
     _ = run
     strategy_profiles = normalize_strategy_profiles(load_strategy_profiles())
+
+    if selected_tab == VIEW_TO_LABEL["user_mgmt"]:
+        st.title("User Management")
+        render_settings_panel()
+        return
+
+    if selected_tab == VIEW_TO_LABEL["config"]:
+        st.title("Configuration")
+        st.caption("All app controls are managed here and apply across pages.")
+        st.markdown("### Display")
+        cdm1, cdm2 = st.columns(2)
+        cdm1.toggle("Dark mode", key="cfg_dark_mode")
+        cdm2.toggle("Fast interaction mode", key="cfg_fast_mode", help="Reduces heavy chart rendering for faster clicks/saves.")
+
+        st.markdown("### Data Paths")
+        st.radio(
+            "Data source mode",
+            options=["Repo data (GitHub)", "Upload files (Cloud)", "Local paths (Desktop)"],
+            key="cfg_data_mode",
+            horizontal=True,
+        )
+        if st.session_state.get("cfg_data_mode") == "Repo data (GitHub)":
+            st.caption("Using data files from repository `data/` folder.")
+        elif st.session_state.get("cfg_data_mode") == "Upload files (Cloud)":
+            st.file_uploader("State strategy file", type=None, key="cfg_strategy_upload")
+            st.file_uploader("State data CSV", type=["csv"], key="cfg_state_upload")
+            st.file_uploader("State-segment CSV", type=["csv"], key="cfg_state_seg_upload")
+            st.file_uploader("Channel group CSV", type=["csv"], key="cfg_channel_group_upload")
+            st.file_uploader("Price exploration CSV", type=["csv"], key="cfg_price_upload")
+            st.file_uploader("Channel group x state CSV", type=["csv"], key="cfg_channel_state_upload")
+        else:
+            st.text_input("State strategy", key="cfg_strategy_path")
+            st.text_input("State data", key="cfg_state_path")
+            st.text_input("State-segment data", key="cfg_state_seg_path")
+            st.text_input("Channel group data", key="cfg_channel_group_path")
+            st.text_input("Price exploration data", key="cfg_price_path")
+            st.text_input("Channel group x state data", key="cfg_channel_state_path")
+
+        st.markdown("### Model Controls")
+        st.select_slider("Recommendation Strategy", options=OPTIMIZATION_MODES, key="cfg_optimization_mode")
+        st.slider("Max CPC increase %", 0, 45, key="cfg_max_cpc_increase_pct")
+        st.slider("Growth weight", 0.0, 1.0, step=0.05, key="cfg_growth_weight")
+        st.slider("Profitability weight", 0.0, 1.0, step=0.05, key="cfg_profit_weight")
+        st.slider("Min bids for reliable channel-state", 1, 20, key="cfg_min_bids_channel_state")
+        st.slider("CPC penalty", 0.0, 1.5, step=0.05, key="cfg_cpc_penalty_weight")
+        st.slider("Min intent to allow positive scaling", 0.0, 1.0, step=0.01, key="cfg_min_intent_for_scale")
+        st.slider("ROE severe pullback floor", -1.0, 0.5, step=0.01, key="cfg_roe_pullback_floor")
+        st.slider("Combined ratio severe pullback ceiling", 0.8, 1.5, step=0.01, key="cfg_cr_pullback_ceiling")
+        st.slider("Max performance drop vs current", 0.00, 0.60, step=0.01, key="cfg_max_perf_drop")
+        st.slider("Minimum new performance", 0.20, 1.50, step=0.01, key="cfg_min_new_performance")
+        st.slider("Min clicks for intent significance", 10, 300, step=5, key="cfg_min_clicks_intent_sig")
+        st.slider("Min bids for price-test significance", 10, 500, step=5, key="cfg_min_bids_price_sig")
+        st.slider("Min clicks for price-test significance", 5, 200, step=5, key="cfg_min_clicks_price_sig")
+        st.slider("Min binds for state performance significance", 5, 10, step=1, key="cfg_min_binds_perf_sig")
+        st.slider("Aggressive cutoff", 0.3, 1.0, step=0.01, key="cfg_aggressive_cutoff")
+        st.slider("Controlled cutoff", 0.2, 0.8, step=0.01, key="cfg_controlled_cutoff")
+        st.slider("Maintain cutoff", 0.0, 0.6, step=0.01, key="cfg_maintain_cutoff")
+        st.slider("Strongest Momentum cap", -10, 60, step=1, key="cfg_max_adj_strongest")
+        st.slider("Moderate Momentum cap", -10, 50, step=1, key="cfg_max_adj_moderate")
+        st.slider("Minimal Growth cap", -10, 40, step=1, key="cfg_max_adj_minimal")
+        st.slider("Constrained / Inactive cap", -10, 30, step=1, key="cfg_max_adj_constrained")
+
+        cfg_settings = current_settings_from_session()
+        st.caption(
+            f"Effective CPC cap: {effective_cpc_cap_pct(cfg_settings):.0f}% | "
+            f"Effective CPC penalty: {effective_cpc_penalty(cfg_settings):.2f}"
+        )
+        st.success("Configuration updated.")
+        return
 
     # Page-scoped lazy data loading: Plan Settings uses lightweight inputs only.
     is_plan_settings = selected_tab == VIEW_TO_LABEL["settings"]
@@ -2151,7 +2231,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
                 f"Manual overrides active: {active_manual_overrides}. These rows are locked to manual price-adjustment and may not change with Recommendation Strategy."
             )
 
-    if selected_tab == tab_labels[0]:
+    if selected_tab == VIEW_TO_LABEL["tab0"]:
         map_df0 = state_df.merge(state_extra_df, on="State", how="left")
         map_df0["Expected_Additional_Clicks"] = map_df0["Expected_Additional_Clicks"].fillna(0)
         map_df0["Expected_Additional_Binds"] = map_df0["Expected_Additional_Binds"].fillna(0)
@@ -2351,7 +2431,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         )
         render_formatted_table(state_perf_layer, use_container_width=True)
 
-    elif selected_tab == tab_labels[1]:
+    elif selected_tab == VIEW_TO_LABEL["settings"]:
         st.markdown("### Plan Settings")
         st.caption("Manage product strategy assignment and recommendation policy by strategy. Changes apply after Save.")
         backend = persistence_backend_name()
@@ -2516,7 +2596,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
                 else:
                     st.info("Strategy already exists.")
 
-    elif selected_tab == tab_labels[2]:
+    elif selected_tab == VIEW_TO_LABEL["tab1"]:
         map_df = state_df.merge(state_extra_df, on="State", how="left")
         map_df["Expected_Additional_Clicks"] = map_df["Expected_Additional_Clicks"].fillna(0)
         map_df["Expected_Additional_Binds"] = map_df["Expected_Additional_Binds"].fillna(0)
@@ -3284,7 +3364,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
                             render_formatted_table(audit_df, use_container_width=True)
                         st.caption("Use `Adj Selection` dropdown in the table, then click `Save Edits` to apply all changes.")
 
-    elif selected_tab == tab_labels[3]:
+    elif selected_tab == VIEW_TO_LABEL["tab2"]:
         st.subheader("📊 Channel Group Analysis")
         current_binds = rec_df["Binds"].fillna(0).sum()
         add_binds = rec_df["Expected Additional Binds"].fillna(0).sum()
@@ -3399,7 +3479,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
         grp = grp[show_cols].sort_values("Additional Binds", ascending=False)
         render_formatted_table(grp, use_container_width=True)
 
-    elif selected_tab == tab_labels[4]:
+    elif selected_tab == VIEW_TO_LABEL["tab3"]:
         st.subheader("🧠 Channel Group + State Recommendations")
 
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -3455,7 +3535,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             mime="text/csv",
         )
 
-    elif selected_tab == tab_labels[5]:
+    elif selected_tab == VIEW_TO_LABEL["tab4"]:
         st.subheader("🧪 Price Exploration Details")
         st.caption("Master-detail view of valid test points by state + channel group.")
         st.markdown(
@@ -4010,7 +4090,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
                             ]
                             st.dataframe(show_tbl, use_container_width=True, hide_index=True)
 
-    elif selected_tab == tab_labels[6]:
+    elif selected_tab == VIEW_TO_LABEL["tab5"]:
         st.subheader("📚 General Analytics")
         st.caption("Drag dimensions to row groups/pivot, reorder, and hide columns from the Columns panel.")
         st.markdown(
@@ -4371,7 +4451,7 @@ def main(forced_view: Optional[str] = None, multipage_mode: bool = False) -> Non
             st.info("`streamlit-aggrid` is unavailable in this environment. Showing static table fallback.")
             render_formatted_table(analytics_df, use_container_width=True)
 
-    elif selected_tab == tab_labels[7]:
+    elif selected_tab == VIEW_TO_LABEL["neon"]:
         st.subheader("🌌 Neon Insights Cockpit")
         st.caption("Futuristic overview of growth, intent, performance, and strategy using current model outputs.")
         if fast_mode:

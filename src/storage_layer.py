@@ -6,11 +6,12 @@ from typing import Callable, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from config import OVERRIDES_PATH
+from config import OVERRIDES_PATH, AUTH_USERS_PATH
 
 ANALYTICS_PRESETS_PATH = Path("data/analytics_presets.json")
 STATE_STRATEGY_OVERRIDES_PATH = Path("data/state_strategy_overrides.json")
 STRATEGY_PROFILES_PATH = Path("data/strategy_profiles.json")
+AUTH_USERS_STORAGE_PATH = AUTH_USERS_PATH
 
 
 def _get_secret(name: str) -> str:
@@ -240,4 +241,18 @@ def save_strategy_profiles(profiles: dict) -> tuple[bool, str]:
         _clean_strategy_profiles,
         "Update strategy profiles",
         "Failed to write strategy profiles.",
+    )
+
+
+def load_auth_users_store() -> dict:
+    return _load_json(AUTH_USERS_STORAGE_PATH, _clean_any)
+
+
+def save_auth_users_store(users: dict) -> tuple[bool, str]:
+    return _save_json(
+        AUTH_USERS_STORAGE_PATH,
+        users,
+        _clean_any,
+        "Update auth users",
+        "Failed to save user credentials.",
     )
