@@ -18,12 +18,18 @@ ALLOWED_EMAILS_STORAGE_PATH = Path("data/allowed_emails_store.json")
 def _get_secret(name: str) -> str:
     val = os.getenv(name, "")
     if val:
-        return str(val).strip()
+        out = str(val).strip()
+        if (out.startswith('"') and out.endswith('"')) or (out.startswith("'") and out.endswith("'")):
+            out = out[1:-1].strip()
+        return out
     try:
         import streamlit as st
 
         if name in st.secrets:
-            return str(st.secrets[name]).strip()
+            out = str(st.secrets[name]).strip()
+            if (out.startswith('"') and out.endswith('"')) or (out.startswith("'") and out.endswith("'")):
+                out = out[1:-1].strip()
+            return out
     except Exception:
         pass
     return ""
@@ -62,16 +68,16 @@ def _github_get_json(local_path: Path) -> tuple[Optional[dict], Optional[str], s
         return None, None, "GitHub persistence not configured."
     remote_path = _join_remote_path(local_path)
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{remote_path}?ref={cfg['branch']}"
-    req = Request(
-        url,
-        headers={
-            "Authorization": f"token {cfg['token']}",
+    def _headers(auth_style: str) -> dict:
+        auth = f"token {cfg['token']}" if auth_style == "token" else f"Bearer {cfg['token']}"
+        return {
+            "Authorization": auth,
             "Accept": "application/vnd.github+json",
             "User-Agent": "beacon-planner/1.0",
             "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+        }
     try:
+        req = Request(url, headers=_headers("token"))
         with urlopen(req, timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         raw = payload.get("content", "")
@@ -83,6 +89,21 @@ def _github_get_json(local_path: Path) -> tuple[Optional[dict], Optional[str], s
             return {}, payload.get("sha"), ""
         return data, payload.get("sha"), ""
     except HTTPError as e:
+        if e.code == 401:
+            try:
+                req2 = Request(url, headers=_headers("bearer"))
+                with urlopen(req2, timeout=10) as resp2:
+                    payload = json.loads(resp2.read().decode("utf-8"))
+                raw = payload.get("content", "")
+                if not raw:
+                    return {}, payload.get("sha"), ""
+                decoded = base64.b64decode(raw.encode("utf-8")).decode("utf-8")
+                data = json.loads(decoded)
+                if not isinstance(data, dict):
+                    return {}, payload.get("sha"), ""
+                return data, payload.get("sha"), ""
+            except Exception:
+                pass
         body = ""
         try:
             body = e.read().decode("utf-8", errors="ignore")
@@ -114,21 +135,36 @@ def _github_put_json(local_path: Path, data: dict, message: str) -> tuple[bool, 
     if sha:
         body["sha"] = sha
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{remote_path}"
-    req = Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        method="PUT",
-        headers={
-            "Authorization": f"token {cfg['token']}",
+    def _headers(auth_style: str) -> dict:
+        auth = f"token {cfg['token']}" if auth_style == "token" else f"Bearer {cfg['token']}"
+        return {
+            "Authorization": auth,
             "Accept": "application/vnd.github+json",
             "User-Agent": "beacon-planner/1.0",
             "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+        }
     try:
+        req = Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            method="PUT",
+            headers=_headers("token"),
+        )
         with urlopen(req, timeout=15):
             return True, ""
     except HTTPError as e:
+        if e.code == 401:
+            try:
+                req2 = Request(
+                    url,
+                    data=json.dumps(body).encode("utf-8"),
+                    method="PUT",
+                    headers=_headers("bearer"),
+                )
+                with urlopen(req2, timeout=15):
+                    return True, ""
+            except Exception:
+                pass
         body = ""
         try:
             body = e.read().decode("utf-8", errors="ignore")
