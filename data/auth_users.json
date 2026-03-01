@@ -6,10 +6,10 @@
     "invite_token": "",
     "invited_at": "",
     "iterations": 240000,
-    "last_login_at": "2026-02-27T12:51:21.818110+00:00",
+    "last_login_at": "2026-03-01T12:55:21.342148+00:00",
     "password_hash": "Fa0y0KKdRDM6FrMokodj/LtdV2v2QVUUOdv1fhxnQrk=",
     "salt": "m76rSdc6nuaIeehGP9gdsQ==",
-    "session_expires_at": "2026-03-06T12:51:21.818163+00:00",
-    "session_token": "0PaSuqho4Ulk-SdTmV3Ap74FwnKa_Mws5ySHOfyrfaA"
+    "session_expires_at": "2026-03-08T12:55:21.342200+00:00",
+    "session_token": "FJ6k0_SQfVncRRYzAZOSbmUcCK9QvwyeKHOr4HCkgY8"
   }
 }
